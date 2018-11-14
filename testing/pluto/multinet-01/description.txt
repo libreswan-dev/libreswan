@@ -9,10 +9,3 @@ negotiate it.  However, the following does occur.
 2) each policy is given an "alias", and if one --up's an alias, then all
    connections with that alias are brought up (or down).
 
-
-It tests the two types of syntax allowed by using one type on east and
-one type on west.
-
-The IKE SA is shared, and ideally should be deleted when the last IPsec SA
-is deleted. But it is not. This is not a big problem as it will go away
-on its own later.

@@ -5,7 +5,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -64,10 +64,9 @@ size_t dstlen;
 	unsigned char buf[KEYID_BUF];	/* ample room */
 	unsigned char *bufend = buf + sizeof(buf);
 	unsigned char *p;
+	size_t n;
 
 	p = buf;
-
-	/* start with length of e; assume that it fits */
 	if (elen <= 255) {
 		*p++ = elen;
 	} else if ((elen & ~0xffff) == 0) {
@@ -77,19 +76,14 @@ size_t dstlen;
 	} else {
 		return 0;       /* unrepresentable exponent length */
 	}
+	n = bufend - p;
+	if (elen < n)
+		n = elen;
+	memcpy(p, e, n);
+	p += n;
 
-	/* append as much of e as fits */
-	{
-		size_t n = bufend - p;
-		if (elen < n)
-			n = elen;
-		memcpy(p, e, n);
-		p += n;
-	}
-
-	/* append as much of m as fits */
-	{
-		size_t n = bufend - p;
+	n = bufend - p;
+	if (n > 0) {
 		if (mlen < n)
 			n = mlen;
 		memcpy(p, m, n);

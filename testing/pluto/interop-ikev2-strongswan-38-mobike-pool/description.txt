@@ -1,1 +1,0 @@
-IKEv2 mobike responder support. Strongswan/road is the initiator and migrates sa.

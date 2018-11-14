@@ -13,4 +13,3 @@ iptables -A OUTPUT -d 192.0.2.0/24 -j DROP
 iptables -t nat -L -v
 
 echo done.
-: ==== end ====

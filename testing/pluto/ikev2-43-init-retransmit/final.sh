@@ -1,8 +1,8 @@
-../../pluto/bin/ipsec-look.sh
-grep retransmits: /tmp/pluto.log | sed -e 's/current time is [.0-9]*/current time is .../'
+ipsec look
+grep retransmit /tmp/pluto.log
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
-../bin/check-for-core.sh
+if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

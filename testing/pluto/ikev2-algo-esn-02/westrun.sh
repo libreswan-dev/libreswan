@@ -1,4 +1,4 @@
 # should fail to establish
-ipsec whack --impair suppress-retransmits
+ipsec whack --debug-all --impair-retransmits
 ipsec auto --up replay
 echo done

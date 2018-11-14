@@ -6,15 +6,15 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version. See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version. See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Library General Public
  * License for more details.
  */
-
-#include "ip_subnet.h"
+#include "internal.h"
+#include "libreswan.h"
 
 /*
  * rangetosubnet - turn an address range into a subnet, if possible
@@ -22,20 +22,18 @@
  * A range which is a valid subnet will have a network part which is the
  * same in the from value and the to value, followed by a host part which
  * is all 0 in the from value and all 1 in the to value.
- *
- * ??? this really should use ip_range rather than a pair of ip_address values
  */
 err_t rangetosubnet(from, to, dst)
-const ip_address *from;
+const ip_address * from;
 const ip_address *to;
 ip_subnet *dst;
 {
-	const unsigned char *fp;
-	const unsigned char *tp;
+	unsigned char *fp;
+	unsigned char *tp;
 	unsigned fb;
 	unsigned tb;
-	const unsigned char *f;
-	const unsigned char *t;
+	unsigned char *f;
+	unsigned char *t;
 	size_t n;
 	size_t n2;
 	int i;
@@ -45,11 +43,11 @@ ip_subnet *dst;
 	if (addrtypeof(from) != addrtypeof(to))
 		return "mismatched address types";
 
-	n = addrbytesptr_read(from, &fp);
+	n = addrbytesptr(from, &fp);
 	if (n == 0)
 		return "unknown address type";
 
-	n2 = addrbytesptr_read(to, &tp);
+	n2 = addrbytesptr(to, &tp);
 	if (n != n2)
 		return "internal size mismatch in rangetosubnet";
 
@@ -138,8 +136,8 @@ int main(int argc, char *argv[])
 	n = subnettot(&sub, 0, buf, sizeof(buf));
 	if (n > sizeof(buf)) {
 		fprintf(stderr, "%s: reverse conversion", argv[0]);
-		fprintf(stderr, " failed: need %zd bytes, have only %zd\n",
-			n, sizeof(buf));
+		fprintf(stderr, " failed: need %ld bytes, have only %ld\n",
+			(long)n, (long)sizeof(buf));
 		exit(1);
 	}
 	printf("%s\n", buf);
@@ -211,8 +209,8 @@ void regress(void)
 		} else {
 			n = subnettot(&sub, 0, buf, sizeof(buf));
 			if (n > sizeof(buf)) {
-				printf("`%s'-`%s' subnettot failed: need %zd\n",
-					r->start, r->stop, n);
+				printf("`%s'-`%s' subnettot failed: need %ld\n",
+					r->start, r->stop, (long)n);
 				status = 1;
 			} else if (!streq(r->output, buf)) {
 				printf("`%s'-`%s' gave `%s', expected `%s'\n",

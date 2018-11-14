@@ -1,15 +1,13 @@
 /* Security Policy Data Base (such as it is)
- *
  * Copyright (C) 1998-2001,2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2016-2018 Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -44,19 +42,17 @@
 #include "spdb.h"
 #include "whack.h"      /* for RC_LOG_SERIOUS */
 #include "plutoalg.h"
-#include "crypto.h"
+
+#include "sha1.h"
+#include "md5.h"
+#include "crypto.h" /* requires sha1.h and md5.h */
 
 #include "ikev1.h"
 #include "alg_info.h"
 #include "kernel_alg.h"
 #include "ike_alg.h"
-#include "ike_alg_encrypt.h"
-#include "ike_alg_integ.h"
 #include "db_ops.h"
-#include "lswfips.h" /* for libreswan_fipsmode */
-#include "crypt_prf.h"
 
-#include "ip_address.h"
 #include "nat_traversal.h"
 
 #ifdef HAVE_LABELED_IPSEC
@@ -164,12 +160,12 @@ static bool out_attr(int type,
 	      enum_names *const *attr_val_descs,
 	      pb_stream *pbs)
 {
+	struct isakmp_attribute attr;
+
 	if (val >> 16 == 0) {
 		/* short value: use TV form */
-		struct isakmp_attribute attr = {
-			.isaat_af_type = type | ISAKMP_ATTR_AF_TV,
-			.isaat_lv = val,
-		};
+		attr.isaat_af_type = type | ISAKMP_ATTR_AF_TV;
+		attr.isaat_lv = val;
 		if (!out_struct(&attr, attr_desc, pbs, NULL))
 			return FALSE;
 	} else {
@@ -181,13 +177,11 @@ static bool out_attr(int type,
 		 * Voila: a fixed format!
 		 */
 		pb_stream val_pbs;
-		uint32_t nval = htonl(val);
+		u_int32_t nval = htonl(val);
 
 		passert((type & ISAKMP_ATTR_AF_MASK) == 0);
-		struct isakmp_attribute attr = {
-			.isaat_af_type = type | ISAKMP_ATTR_AF_TLV,
-			.isaat_lv = sizeof(nval),
-		};
+		attr.isaat_af_type = type | ISAKMP_ATTR_AF_TLV;
+		attr.isaat_lv = sizeof(nval);
 		if (!out_struct(&attr, attr_desc, pbs, &val_pbs) ||
 		    !out_raw(&nval, sizeof(nval), &val_pbs,
 			     "long attribute value"))
@@ -205,170 +199,7 @@ static bool out_attr(int type,
 	return TRUE;
 }
 
-/*
- * Determine if the proposal is acceptable (or need to keep looking).
- *
- * As a rule, this doesn't log - instead it assumes things were
- * reported earlier.
- */
-
-static bool ikev1_verify_esp(const struct connection *c,
-			     const struct trans_attrs *ta)
-{
-	if (!(c->policy & POLICY_ENCRYPT)) {
-		DBGF(DBG_PARSING,
-		     "ignoring ESP proposal as POLICY_ENCRYPT unset");
-		return false;       /* try another */
-	}
-
-	/*
-	 * Check encryption.
-	 *
-	 * For the key-length, its assumed that the caller checked for
-	 * and patched up either a missing or zero key-length, setting
-	 * .enckeylen to the correct value (which might still be 0).
-	 */
-	if (ta->ta_encrypt == NULL) {
-		/*
-		 * No encryption.  Either because its lookup failed or
-		 * because it was NULLed to force the proposal's
-		 * rejection.
-		 */
-		DBGF(DBG_PARSING,
-		     "ignoring ESP proposal with NULLed or unknown encryption");
-		return false;       /* try another */
-	}
-	if (!kernel_alg_encrypt_ok(ta->ta_encrypt)) {
-		/*
-		 * No kernel support.  Needed because ALG_INFO==NULL
-		 * will act as a wild card.  XXX: but is ALG_INFO ever
-		 * NULL?
-		 */
-		DBGF(DBG_KERNEL|DBG_PARSING,
-		     "ignoring ESP proposal with alg %s not present in kernel",
-		     ta->ta_encrypt->common.fqn);
-		return false;
-	}
-	if (!encrypt_has_key_bit_length(ta->ta_encrypt, ta->enckeylen)) {
-		loglog(RC_LOG_SERIOUS,
-		       "kernel algorithm does not like: %s key_len %u is incorrect",
-		       ta->ta_encrypt->common.fqn, ta->enckeylen);
-		LSWLOG_RC(RC_LOG_SERIOUS, buf) {
-			lswlogf(buf, "unsupported ESP Transform %s from ",
-				ta->ta_encrypt->common.fqn);
-			lswlog_ip(buf, &c->spd.that.host_addr);
-		}
-		return false; /* try another */
-	}
-
-	/*
-	 * Check integrity.
-	 */
-	if (ta->ta_integ == NULL) {
-		/*
-		 * No integrity.  Since, for ESP, when integrity is
-		 * missing, it is forced to .ta_integ=NONE (i.e., not
-		 * NULL), a NULL here must indicate that integrity was
-		 * present but the lookup failed.
-		 */
-		DBGF(DBG_PARSING, "ignoring ESP proposal with unknown integrity");
-		return false;       /* try another */
-	}
-	if (ta->ta_integ != &ike_alg_integ_none && !kernel_alg_integ_ok(ta->ta_integ)) {
-		/*
-		 * No kernel support.  Needed because ALG_INFO==NULL
-		 * will act as a wild card.
-		 *
-		 * XXX: but is ALG_INFO ever NULL?
-		 *
-		 * XXX: check for NONE comes from old code just
-		 * assumed NONE was supported.
-		 */
-		DBGF(DBG_KERNEL|DBG_PARSING,
-		     "ignoring ESP proposal with alg %s not present in kernel",
-		     ta->ta_integ->common.fqn);
-		return false;
-	}
-
-	/*
-	 * Check for screwups.  Perhaps the parser rejcts this, anyone
-	 * know?
-	 */
-	if (ta->ta_prf != NULL) {
-		PEXPECT_LOG("ESP IPsec Transform refused: contains unexpected PRF %s",
-			    ta->ta_prf->common.fqn);
-		return false;
-	}
-	if (ta->ta_dh != NULL) {
-		PEXPECT_LOG("ESP IPsec Transform refused: contains unexpected DH %s",
-			    ta->ta_dh->common.fqn);
-		return false;
-	}
-
-	if (c->alg_info_esp== NULL) {
-		DBGF(DBG_CONTROL, "ESP IPsec Transform verified unconditionally; no alg_info to check against");
-		return true;
-	}
-
-	FOR_EACH_ESP_INFO(c->alg_info_esp, esp_info) {
-		if (esp_info->encrypt == ta->ta_encrypt &&
-		    (esp_info->enckeylen == 0 ||
-		     ta->enckeylen == 0 ||
-		     esp_info->enckeylen == ta->enckeylen) &&
-		    esp_info->integ == ta->ta_integ) {
-			DBG(DBG_CONTROL,
-			    DBG_log("ESP IPsec Transform verified; matches alg_info entry"));
-			return true;
-		}
-	}
-	return false;
-}
-
-static bool ikev1_verify_ah(const struct connection *c,
-			    const struct trans_attrs *ta)
-{
-	if (!(c->policy & POLICY_AUTHENTICATE)) {
-		DBGF(DBG_PARSING,
-		     "ignoring AH proposal as POLICY_AUTHENTICATE unset");
-		return false;       /* try another */
-	}
-	if (ta->ta_encrypt != NULL) {
-		PEXPECT_LOG("AH IPsec Transform refused: contains unexpected encryption %s",
-			    ta->ta_encrypt->common.fqn);
-		return false;
-	}
-	if (ta->ta_prf != NULL) {
-		PEXPECT_LOG("AH IPsec Transform refused: contains unexpected PRF %s",
-			    ta->ta_prf->common.fqn);
-		return false;
-	}
-	if (ta->ta_integ == NULL) {
-		libreswan_log("AH IPsec Transform refused: missing integrity algorithm");
-		return false;
-	}
-	if (ta->ta_dh != NULL) {
-		PEXPECT_LOG("AH IPsec Transform refused: contains unexpected DH %s",
-			    ta->ta_dh->common.fqn);
-		return false;
-	}
-	if (c->alg_info_esp == NULL) {
-		DBG(DBG_CONTROL,
-		    DBG_log("AH IPsec Transform verified unconditionally; no alg_info to check against"));
-		return true;
-	}
-
-	FOR_EACH_ESP_INFO(c->alg_info_esp, esp_info) {	/* really AH */
-		if (esp_info->integ == ta->ta_integ) {
-			DBG(DBG_CONTROL,
-			    DBG_log("ESP IPsec Transform verified; matches alg_info entry"));
-			return true;
-		}
-	}
-
-	libreswan_log("AH IPsec Transform refused: %s",
-		      ta->ta_integ->common.fqn);
-	return false;
-}
+#define return_on(var, val) { (var) = (val); goto return_out; }
 
 /**
  * Output an SA, as described by a db_sa.
@@ -376,34 +207,26 @@ static bool ikev1_verify_ah(const struct connection *c,
  *
  */
 bool ikev1_out_sa(pb_stream *outs,
-	    const struct db_sa *sadb,
+	    struct db_sa *sadb,
 	    struct state *st,
 	    bool oakley_mode,
 	    bool aggressive_mode,
 	    enum next_payload_types_ikev1 np)
 {
+	pb_stream sa_pbs;
+	unsigned int pcn;
+	bool ret = FALSE;
+	bool ah_spi_generated = FALSE,
+	     esp_spi_generated = FALSE,
+	     ipcomp_cpi_generated = FALSE;
 	struct db_sa *revised_sadb;
 
 	if (oakley_mode) {
-		/*
-		 * Construct the proposals by combining ALG_INFO_IKE
-		 * with the AUTH (proof of identity) extracted from
-		 * the (default?) SADB.  As if by magic, attrs[2] is
-		 * always the authentication method.
-		 *
-		 * XXX: Should replace SADB with a simple map to the
-		 * auth method.
-		 */
-		struct db_attr *auth = &sadb->prop_conjs[0].props[0].trans[0].attrs[2];
-		passert(auth->type.oakley == OAKLEY_AUTHENTICATION_METHOD);
-		enum ikev1_auth_method auth_method = auth->val;
-		/*
-		 * Aggr-Mode - Max transforms == 2 - Multiple
-		 * transforms, 1 DH group
-		 */
-		revised_sadb = oakley_alg_makedb(st->st_connection->alg_info_ike,
-						 auth_method,
-						 aggressive_mode);
+		/* Aggr-Mode - Max transforms == 2 - Multiple transforms, 1 DH group */
+		revised_sadb = oakley_alg_makedb(
+			st->st_connection->alg_info_ike,
+			sadb,
+			aggressive_mode);
 	} else {
 		revised_sadb = kernel_alg_makedb(st->st_connection->policy,
 						 st->st_connection->alg_info_esp,
@@ -456,22 +279,21 @@ bool ikev1_out_sa(pb_stream *outs,
 		sadb = revised_sadb;
 
 	/* SA header out */
-	pb_stream sa_pbs;
 	{
-		struct isakmp_sa sa = {
-			.isasa_np = np,
-			.isasa_doi = ISAKMP_DOI_IPSEC /* all we know */
-		};
+		struct isakmp_sa sa;
+
+		sa.isasa_np = np;
+		sa.isasa_doi = ISAKMP_DOI_IPSEC; /* all we know */
 		if (!out_struct(&sa, &isakmp_sa_desc, outs, &sa_pbs))
-			goto fail;
+			return_on(ret, FALSE);
 	}
 
 	/* within SA: situation out */
 	{
-		static const uint32_t situation = SIT_IDENTITY_ONLY;
+		static const u_int32_t situation = SIT_IDENTITY_ONLY;
 
 		if (!out_struct(&situation, &ipsec_sit_desc, &sa_pbs, NULL))
-			goto fail;
+			return_on(ret, FALSE);
 	}
 
 	/* within SA: Proposal Payloads
@@ -484,33 +306,43 @@ bool ikev1_out_sa(pb_stream *outs,
 	 * See RFC 2408 "ISAKMP" 4.2
 	 */
 
-	bool ah_spi_generated = FALSE,
-	     esp_spi_generated = FALSE,
-	     ipcomp_cpi_generated = FALSE;
-
-	for (unsigned pcn = 0; pcn < sadb->prop_conj_cnt; pcn++) {
-		const struct db_prop_conj *const pc = &sadb->prop_conjs[pcn];
+	for (pcn = 0; pcn < sadb->prop_conj_cnt; pcn++) {
+		struct db_prop_conj *const pc = &sadb->prop_conjs[pcn];
 		int valid_prop_cnt = pc->prop_cnt;
+		unsigned int pn;
 
 		DBG(DBG_EMITTING,
 		    DBG_log("ikev1_out_sa pcn: %d has %d valid proposals",
 			    pcn, valid_prop_cnt));
 
-		for (unsigned pn = 0; pn < pc->prop_cnt; pn++) {
-			const struct db_prop *const p = &pc->props[pn];
+		for (pn = 0; pn < pc->prop_cnt; pn++) {
+			struct db_prop *const p = &pc->props[pn];
 			pb_stream proposal_pbs;
+			struct isakmp_proposal proposal;
+			struct_desc *trans_desc;
+			struct_desc *attr_desc;
+			enum_names *const *attr_val_descs;
+			unsigned int tn;
+			bool tunnel_mode;
 
 			/*
 			 * set the tunnel_mode bit on the last proposal only, and
 			 * only if we are trying to negotiate tunnel mode in the first
 			 * place.
 			 */
-			const bool tunnel_mode = (valid_prop_cnt == 1) &&
+			tunnel_mode = (valid_prop_cnt == 1) &&
 				      (st->st_policy & POLICY_TUNNEL);
 
 			/*
 			 * pick the part of the proposal we are trying to work on
 			 */
+
+			proposal.isap_proposal = pcn;
+			proposal.isap_protoid = p->protoid;
+			proposal.isap_spisize = oakley_mode ? 0 :
+						p->protoid == PROTO_IPCOMP ?
+						  IPCOMP_CPI_SIZE :
+						  IPSEC_DOI_SPI_SIZE;
 
 			DBG(DBG_EMITTING,
 			    DBG_log("ikev1_out_sa pcn: %d pn: %d<%d valid_count: %d trans_cnt: %d",
@@ -522,25 +354,15 @@ bool ikev1_out_sa(pb_stream *outs,
 				continue;
 
 			/* Proposal header */
-			{
-				valid_prop_cnt--;
+			if (--valid_prop_cnt > 0)
+				proposal.isap_np = ISAKMP_NEXT_P;
+			else
+				proposal.isap_np = ISAKMP_NEXT_NONE;
 
-				struct isakmp_proposal proposal = {
-					.isap_proposal = pcn,
-					.isap_protoid = p->protoid,
-					.isap_spisize = oakley_mode ? 0 :
-							p->protoid == PROTO_IPCOMP ?
-							  IPCOMP_CPI_SIZE :
-							  IPSEC_DOI_SPI_SIZE,
-					.isap_np = valid_prop_cnt > 0 ?
-						ISAKMP_NEXT_P : ISAKMP_NEXT_NONE,
-					.isap_notrans = p->trans_cnt
-				};
-
-				if (!out_struct(&proposal, &isakmp_proposal_desc,
-						&sa_pbs, &proposal_pbs))
-					goto fail;
-			}
+			proposal.isap_notrans = p->trans_cnt;
+			if (!out_struct(&proposal, &isakmp_proposal_desc,
+					&sa_pbs, &proposal_pbs))
+				return_on(ret, FALSE);
 
 			/* Per-protocols stuff:
 			 * Set trans_desc.
@@ -556,10 +378,6 @@ bool ikev1_out_sa(pb_stream *outs,
 			 * ??? If multiple ESPs are composed, how should their SPIs
 			 * be allocated?
 			 */
-			const struct_desc *trans_desc;
-			const struct_desc *attr_desc;
-			enum_names *const *attr_val_descs;
-
 			{
 				ipsec_spi_t *spi_ptr = NULL;
 				int proto = 0;
@@ -607,8 +425,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						&isakmp_ipsec_attribute_desc;
 					attr_val_descs = ipsec_attr_val_descs;
 
-					/*
-					 * a CPI isn't quite the same as an SPI
+					/* a CPI isn't quite the same as an SPI
 					 * so we use specialized code to emit it.
 					 */
 					if (!ipcomp_cpi_generated) {
@@ -617,12 +434,11 @@ bool ikev1_out_sa(pb_stream *outs,
 								&st->st_connection->spd,
 								tunnel_mode);
 						if (st->st_ipcomp.our_spi == 0)
-							goto fail; /* problem generating CPI */
+							return_on(ret, FALSE); /* problem generating CPI */
 
 						ipcomp_cpi_generated = TRUE;
 					}
-					/*
-					 * CPI is stored in network low order end of an
+					/* CPI is stored in network low order end of an
 					 * ipsec_spi_t.  So we start a couple of bytes in.
 					 */
 					if (!out_raw((u_char *)&st->st_ipcomp.
@@ -631,7 +447,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						     IPCOMP_CPI_SIZE,
 						     IPCOMP_CPI_SIZE,
 						     &proposal_pbs, "CPI"))
-						goto fail;
+						return_on(ret, FALSE);
 					break;
 
 				default:
@@ -649,30 +465,30 @@ bool ikev1_out_sa(pb_stream *outs,
 					if (!out_raw((u_char *)spi_ptr,
 						     IPSEC_DOI_SPI_SIZE,
 						     &proposal_pbs, "SPI"))
-						goto fail;
+						return_on(ret, FALSE);
 				}
 			}
 
 			/* within proposal: Transform Payloads */
-			for (unsigned tn = 0; tn != p->trans_cnt; tn++) {
-				const struct db_trans *const t = &p->trans[tn];
+			for (tn = 0; tn != p->trans_cnt; tn++) {
+				struct db_trans *const t = &p->trans[tn];
 				pb_stream trans_pbs;
+				struct isakmp_transform trans;
+				unsigned int an;
+				bool oakley_keysize = FALSE;
+				bool ipsec_keysize = FALSE;
 
-				{
-					const struct isakmp_transform trans = {
-						.isat_np = (tn == p->trans_cnt - 1) ?
-							ISAKMP_NEXT_NONE :
-							ISAKMP_NEXT_T,
-						.isat_transnum = tn,
-						.isat_transid = t->transid
-					};
+				trans.isat_np = (tn == p->trans_cnt - 1) ?
+						ISAKMP_NEXT_NONE :
+						ISAKMP_NEXT_T;
+				trans.isat_transnum = tn;
+				trans.isat_transid = t->transid;
 
-					if (!out_struct(&trans, trans_desc,
-							&proposal_pbs, &trans_pbs))
-						goto fail;
-				}
+				if (!out_struct(&trans, trans_desc,
+						&proposal_pbs, &trans_pbs))
+					return_on(ret, FALSE);
 
-				/* Within transform: Attributes. */
+				/* Within tranform: Attributes. */
 
 				/* For Phase 2 / Quick Mode, GROUP_DESCRIPTION is
 				 * automatically generated because it must be the same
@@ -687,7 +503,7 @@ bool ikev1_out_sa(pb_stream *outs,
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
-						goto fail;
+						return_on(ret, FALSE);
 				}
 
 				/* automatically generate duration
@@ -698,13 +514,14 @@ bool ikev1_out_sa(pb_stream *outs,
 						      OAKLEY_LIFE_SECONDS,
 						      attr_desc,
 						      attr_val_descs,
-						      &trans_pbs) ||
-					    !out_attr(OAKLEY_LIFE_DURATION,
+						      &trans_pbs))
+						return_on(ret, FALSE);
+					if (!out_attr(OAKLEY_LIFE_DURATION,
 						      deltasecs(st->st_connection->sa_ike_life_seconds),
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
-						goto fail;
+						return_on(ret, FALSE);
 				} else {
 					/* RFC 2407 (IPSEC DOI) 4.5 specifies that
 					 * the default is "unspecified (host-dependent)".
@@ -724,132 +541,119 @@ bool ikev1_out_sa(pb_stream *outs,
 							    attr_desc,
 							    attr_val_descs,
 							    &trans_pbs))
-							goto fail;
+							return_on(ret, FALSE);
 					}
 					if (!out_attr(SA_LIFE_TYPE,
 						      SA_LIFE_TYPE_SECONDS,
 						      attr_desc,
 						      attr_val_descs,
-						      &trans_pbs) ||
-					    !out_attr(SA_LIFE_DURATION,
+						      &trans_pbs))
+						return_on(ret, FALSE);
+					if (!out_attr(SA_LIFE_DURATION,
 						      deltasecs(st->st_connection->sa_ipsec_life_seconds),
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
-						goto fail;
+						return_on(ret, FALSE);
 
 #ifdef HAVE_LABELED_IPSEC
 					if (st->sec_ctx != NULL &&
 					    st->st_connection->labeled_ipsec) {
-						passert(st->sec_ctx->ctx.ctx_len <= MAX_SECCTX_LEN);
-
+						struct isakmp_attribute attr;
 						pb_stream val_pbs;
-						struct isakmp_attribute attr = {
-							.isaat_af_type =
-								secctx_attr_type |
-								ISAKMP_ATTR_AF_TLV,
-						};
+
+						passert(st->sec_ctx->ctx.ctx_len <= MAX_SECCTX_LEN);
+						attr.isaat_af_type =
+							secctx_attr_type |
+							ISAKMP_ATTR_AF_TLV;
 
 						if (!out_struct(&attr,
 								attr_desc,
 								&trans_pbs,
-								&val_pbs) ||
-						    !out_struct(&st->sec_ctx->ctx,
+								&val_pbs))
+							return_on(ret, FALSE);
+
+						if (!out_struct(&st->sec_ctx->ctx,
 								&sec_ctx_desc,
 								&val_pbs,
-								NULL) ||
-						    !out_raw(st->sec_ctx->
+								NULL))
+							return_on(ret, FALSE);
+
+						if (!out_raw(st->sec_ctx->
 							     sec_ctx_value,
 							     st->sec_ctx->ctx.ctx_len, &val_pbs,
 							     " variable length sec ctx"))
-							goto fail;
+							return_on(ret, FALSE);
 
 						close_output_pbs(&val_pbs);
 					}
 #endif
 				}
 
-				/*
-				 * spit out attributes from table
-				 *
-				 * XXX: Assume that the code
-				 * constructing the attribute table
-				 * handled optional and extra key
-				 * lengths (and if it is wrong it is
-				 * deliberate).  I.e., don't try to
-				 * also handle it here.
-				 *
-				 * OTOH, do completely override
-				 * key-lengths when so impaired.
-				 */
-				enum send_impairment impair_key_length_attribute =
-					(oakley_mode ? impair_ike_key_length_attribute
-					 : impair_child_key_length_attribute);
-				long key_length_to_impair = -1;
-				for (unsigned an = 0; an != t->attr_cnt; an++) {
-					const struct db_attr *a = &t->attrs[an];
-					/*
-					 * Strip out or duplicate
-					 * key-length attibute?
-					 */
-					if (impair_key_length_attribute > 0 &&
-					    (oakley_mode ? a->type.oakley == OAKLEY_KEY_LENGTH
-					     :  a->type.ipsec == KEY_LENGTH)) {
-						key_length_to_impair = a->val;
-						libreswan_log("IMPAIR: stripping key-length");
-						continue;
+
+				if (oakley_mode) {
+					oakley_keysize = FALSE;
+					for (an = 0; an != t->attr_cnt; an++) {
+						struct db_attr *a = &t->attrs[an];
+
+						if (a->type.oakley == OAKLEY_KEY_LENGTH) {
+							oakley_keysize = TRUE;
+						}
 					}
+				} else {
+					ipsec_keysize = FALSE;
+					for (an = 0; an != t->attr_cnt; an++) {
+						struct db_attr *a = &t->attrs[an];
+
+						if (a->type.ipsec == KEY_LENGTH) {
+							ipsec_keysize = TRUE;
+						}
+					}
+				}
+
+				/* spit out attributes from table */
+				for (an = 0; an != t->attr_cnt; an++) {
+					struct db_attr *a = &t->attrs[an];
+
 					if (!out_attr(oakley_mode ? a->type.oakley : a->type.ipsec ,
 						      a->val,
 						      attr_desc,
 						      attr_val_descs,
 						      &trans_pbs))
-						goto fail;
-				}
-				/*
-				 * put back a key-length?
-				 */
-				switch (impair_key_length_attribute) {
-				case SEND_NORMAL:
-					break;
-				case SEND_EMPTY:
-					/*
-					 * XXX: how? IKEv2 sends a
-					 * long form packet of no
-					 * length.
-					 */
-					libreswan_log("IMPAIR: key-length-attribute:empty not implemented");
-					break;
-				case SEND_OMIT:
-					libreswan_log("IMPAIR: not sending key-length attribute");
-					break;
-				case SEND_DUPLICATE:
-					if (key_length_to_impair >= 0) {
-						libreswan_log("IMPAIR: duplicating key-length");
-						for (unsigned dup = 0; dup < 2; dup++) {
-							if (!out_attr(oakley_mode ? OAKLEY_KEY_LENGTH : KEY_LENGTH,
-								      key_length_to_impair,
-								      attr_desc,
-								      attr_val_descs,
-								      &trans_pbs))
-								goto fail;
+						return_on(ret, FALSE);
+
+					if (oakley_mode) {
+						if (!oakley_keysize && a->type.oakley == OAKLEY_ENCRYPTION_ALGORITHM) {
+							int defkeysize = crypto_req_keysize(CRK_IKEv1, a->val);
+
+							if (defkeysize != 0) {
+								DBG(DBG_CONTROLMORE, DBG_log("inserting default oakley key length attribute payload of %d bits",
+									defkeysize));
+								if (!out_attr(OAKLEY_KEY_LENGTH,
+									defkeysize,
+									attr_desc,
+									attr_val_descs,
+									&trans_pbs))
+									return_on(ret, FALSE);
+							}
 						}
 					} else {
-						libreswan_log("IMPAIR: no key-length to duplicate");
+						/* ipsec_mode */
+						if (!ipsec_keysize) {
+							int defkeysize = crypto_req_keysize(CRK_ESPorAH, t->transid);
+
+							if (defkeysize != 0) {
+								DBG(DBG_CONTROLMORE, DBG_log("inserting default ipsec key length attribute payload of %d bits",
+									defkeysize));
+								if (!out_attr(KEY_LENGTH,
+									defkeysize,
+									attr_desc,
+									attr_val_descs,
+									&trans_pbs))
+									return_on(ret, FALSE);
+							}
+						}
 					}
-					break;
-				case SEND_ROOF:
-				default:
-				{
-					unsigned keylen = impair_key_length_attribute - SEND_ROOF;
-					libreswan_log("IMPAIR: sending key-length attribute value %u",
-						      keylen);
-					if (!out_attr(oakley_mode ? OAKLEY_KEY_LENGTH : KEY_LENGTH,
-						      keylen, attr_desc, attr_val_descs,
-						      &trans_pbs))
-						goto fail;
-					break;
-				}
 				}
 				close_output_pbs(&trans_pbs);
 			}
@@ -858,12 +662,11 @@ bool ikev1_out_sa(pb_stream *outs,
 		/* end of a conjunction of proposals */
 	}
 	close_output_pbs(&sa_pbs);
-	free_sa(&revised_sadb);
-	return TRUE;
+	ret = TRUE;
 
-fail:
+return_out:
 	free_sa(&revised_sadb);
-	return FALSE;
+	return ret;
 }
 
 /** Handle long form of duration attribute.
@@ -871,11 +674,11 @@ fail:
  * "Clamping" is probably an acceptable way to impose this limitation.
  *
  * @param pbs PB Stream
- * @return uint32_t duration, in seconds.
+ * @return u_int32_t duration, in seconds.
  */
-static uint32_t decode_long_duration(pb_stream *pbs)
+static u_int32_t decode_long_duration(pb_stream *pbs)
 {
-	uint32_t val = 0;
+	u_int32_t val = 0;
 
 	/* ignore leading zeros */
 	while (pbs_left(pbs) != 0 && *pbs->cur == '\0')
@@ -885,14 +688,14 @@ static uint32_t decode_long_duration(pb_stream *pbs)
 		/* "clamp" too large value to max representable value */
 		val -= 1; /* portable way to get to maximum value */
 		DBG(DBG_PARSING,
-		    DBG_log("   too large duration clamped to: %" PRIu32,
-			    val));
+		    DBG_log("   too large duration clamped to: %lu",
+			    (unsigned long)val));
 	} else {
 		/* decode number */
 		while (pbs_left(pbs) != 0)
 			val = (val << BITS_PER_BYTE) | *pbs->cur++;
 		DBG(DBG_PARSING,
-		    DBG_log("   long duration: %" PRIu32, val));
+		    DBG_log("   long duration: %lu", (unsigned long)val));
 	}
 	return val;
 }
@@ -912,7 +715,7 @@ lset_t preparse_isakmp_sa_body(pb_stream sa_pbs /* by value! */)
 	struct isakmp_transform trans;
 	struct isakmp_attribute a;
 	pb_stream attr_pbs;
-	uint32_t ipsecdoisit;
+	u_int32_t ipsecdoisit;
 	unsigned trans_left;
 	lset_t policy = LEMPTY;
 
@@ -974,73 +777,13 @@ lset_t preparse_isakmp_sa_body(pb_stream sa_pbs /* by value! */)
 	 * in a connection's policy.
 	 *
 	 * If both PSK and RSASIG are present now, that means that
-	 * either is acceptable.  The right way to express this is
+	 * either is acceptible.  The right way to express this is
 	 * to turn both off!
 	 */
 	if (LIN(POLICY_PSK | POLICY_RSASIG, policy))
 		policy &= ~(POLICY_PSK | POLICY_RSASIG);
 
 	return policy;
-}
-
-static bool ikev1_verify_ike(const struct trans_attrs *ta,
-			     struct alg_info_ike *alg_info_ike)
-{
-	if (ta->ta_encrypt == NULL) {
-		loglog(RC_LOG_SERIOUS,
-		       "OAKLEY proposal refused: missing encryption");
-		return false;
-	}
-	if (ta->ta_prf == NULL) {
-		loglog(RC_LOG_SERIOUS,
-		       "OAKLEY proposal refused: missing PRF");
-		return false;
-	}
-	if (ta->ta_integ != NULL) {
-		PEXPECT_LOG("OAKLEY proposal refused: contains unexpected integrity %s",
-			    ta->ta_prf->common.fqn);
-		return false;
-	}
-	if (ta->ta_dh == NULL) {
-		loglog(RC_LOG_SERIOUS, "OAKLEY proposal refused: missing DH");
-		return false;
-	}
-	if (alg_info_ike == NULL) {
-		DBG(DBG_CONTROL,
-		    DBG_log("OAKLEY proposal verified unconditionally; no alg_info to check against"));
-		return true;
-	}
-
-	/*
-	 * simple test to toss low key_len, will accept it only
-	 * if specified in "esp" string
-	 */
-	bool ealg_insecure = (ta->enckeylen < 128);
-
-	FOR_EACH_IKE_INFO(alg_info_ike, ike_info) {
-		if (ike_info->encrypt == ta->ta_encrypt &&
-		    (ike_info->enckeylen == 0 ||
-		     ta->enckeylen == 0 ||
-		     ike_info->enckeylen == ta->enckeylen) &&
-		    ike_info->prf == ta->ta_prf &&
-		    ike_info->dh == ta->ta_dh) {
-			if (ealg_insecure) {
-				loglog(RC_LOG_SERIOUS,
-				       "You should NOT use insecure/broken IKE algorithms (%s)!",
-				       ta->ta_encrypt->common.fqn);
-			}
-			DBG(DBG_CONTROL,
-			    DBG_log("OAKLEY proposal verified; matching alg_info found"));
-			return true;
-		}
-	}
-	libreswan_log("Oakley Transform [%s (%d), %s, %s] refused%s",
-		      ta->ta_encrypt->common.fqn, ta->enckeylen,
-		      ta->ta_prf->common.fqn, ta->ta_dh->common.fqn,
-		      ealg_insecure ?
-		      " due to insecure key_len and enc. alg. not listed in \"ike\" string" :
-		      "");
-	return false;
 }
 
 /**
@@ -1052,7 +795,7 @@ static bool ikev1_verify_ike(const struct trans_attrs *ta,
  * proposal is emitted.
  *
  * If "selection" is true, the SA is supposed to represent the
- * single transform that the peer has accepted.
+ * single tranform that the peer has accepted.
  * ??? We only check that it is acceptable, not that it is one that we offered!
  *
  * It also means that we are inR1, and this as implications when we are
@@ -1066,7 +809,7 @@ static bool ikev1_verify_ike(const struct trans_attrs *ta,
 notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payload */
 				    const struct isakmp_sa *sa,	/* header of input SA Payload */
 				    pb_stream *r_sa_pbs,	/* if non-NULL, where to emit winning SA */
-				    bool selection,		/* if this SA is a selection, only one transform
+				    bool selection,		/* if this SA is a selection, only one tranform
 								 * can appear. */
 				    struct state *const st)	/* current state object */
 {
@@ -1074,11 +817,10 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 	bool xauth_init = FALSE,
 		xauth_resp = FALSE;
 	const char *const role = selection ? "initiator" : "responder";
-	const chunk_t *pss = &empty_chunk;
 
 	passert(c != NULL);
 
-	/* calculate the per-end policy that might apply */
+	/* calculate the per-end policy which might apply */
 	const struct spd_route *spd;
 
 	for (spd = &c->spd; spd != NULL; spd = spd->spd_next) {
@@ -1104,20 +846,20 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 		loglog(RC_LOG_SERIOUS, "Unknown/unsupported DOI %s",
 		       enum_show(&doi_names, sa->isasa_doi));
 		/* XXX Could send notification back */
-		return DOI_NOT_SUPPORTED;	/* reject whole SA */
+		return DOI_NOT_SUPPORTED;
 	}
 
 	/* Situation */
-	uint32_t ipsecdoisit;
+	u_int32_t ipsecdoisit;
 
 	if (!in_struct(&ipsecdoisit, &ipsec_sit_desc, sa_pbs, NULL))
-		return SITUATION_NOT_SUPPORTED;	/* reject whole SA */
+		return SITUATION_NOT_SUPPORTED;
 
 	if (ipsecdoisit != SIT_IDENTITY_ONLY) {
 		loglog(RC_LOG_SERIOUS, "unsupported IPsec DOI situation (%s)",
 		       bitnamesof(sit_bit_names, ipsecdoisit));
 		/* XXX Could send notification back */
-		return SITUATION_NOT_SUPPORTED;	/* reject whole SA */
+		return SITUATION_NOT_SUPPORTED;
 	}
 
 	/* The rules for ISAKMP SAs are scattered.
@@ -1129,22 +871,21 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 	pb_stream proposal_pbs;
 
 	if (!in_struct(&proposal, &isakmp_proposal_desc, sa_pbs,
-		       &proposal_pbs)) {
-		return PAYLOAD_MALFORMED;	/* reject whole SA */
-	}
+		       &proposal_pbs))
+		return PAYLOAD_MALFORMED;
 
 	if (proposal.isap_np != ISAKMP_NEXT_NONE) {
 		loglog(RC_LOG_SERIOUS,
 		       "Proposal Payload must be alone in Oakley SA; found %s following Proposal",
 		       enum_show(&ikev1_payload_names, proposal.isap_np));
-		return PAYLOAD_MALFORMED;	/* reject whole SA */
+		return PAYLOAD_MALFORMED;
 	}
 
 	if (proposal.isap_protoid != PROTO_ISAKMP) {
 		loglog(RC_LOG_SERIOUS,
 		       "unexpected Protocol ID (%s) found in Oakley Proposal",
 		       enum_show(&ikev1_protocol_names, proposal.isap_protoid));
-		return INVALID_PROTOCOL_ID;	/* reject whole SA */
+		return INVALID_PROTOCOL_ID;
 	}
 
 	/* Just what should we accept for the SPI field?
@@ -1175,21 +916,20 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 		u_char junk_spi[MAX_ISAKMP_SPI_SIZE];
 
 		if (!in_raw(junk_spi, proposal.isap_spisize, &proposal_pbs,
-			    "Oakley SPI")) {
-			return PAYLOAD_MALFORMED;	/* reject whole SA */
-		}
+			    "Oakley SPI"))
+			return PAYLOAD_MALFORMED;
 	} else {
 		loglog(RC_LOG_SERIOUS,
 		       "invalid SPI size (%u) in Oakley Proposal",
 		       (unsigned)proposal.isap_spisize);
-		return INVALID_SPI;	/* reject whole SA */
+		return INVALID_SPI;
 	}
 
 	if (selection && proposal.isap_notrans != 1) {
 		loglog(RC_LOG_SERIOUS,
 		       "a single Transform is required in a selecting Oakley Proposal; found %u",
 		       (unsigned)proposal.isap_notrans);
-		return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+		return BAD_PROPOSAL_SYNTAX;
 	}
 
 	/* for each transform payload... */
@@ -1198,32 +938,34 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 	unsigned no_trans_left = proposal.isap_notrans;
 
 	for (;;) {
+		u_int16_t life_type = 0;	/* initialized to silence GCC */
+		struct trans_attrs ta;
+		err_t ugh = NULL;       /* set to diagnostic when problem detected */
+		char ugh_buf[256];      /* room for building a diagnostic */
+
+		zero(&ta);	/* ??? may not NULL pointer fields */
+
+		/* initialize only optional field in ta */
+		ta.life_seconds = deltatime(OAKLEY_ISAKMP_SA_LIFETIME_DEFAULT); /* When this SA expires (seconds) */
+
 		if (no_trans_left == 0) {
 			loglog(RC_LOG_SERIOUS,
 			       "number of Transform Payloads disagrees with Oakley Proposal Payload");
-			return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+			return BAD_PROPOSAL_SYNTAX;
 		}
-
-		uint16_t life_type = 0;	/* initialized to silence GCC */
-
-		/* initialize only optional field in ta */
-		struct trans_attrs ta = {
-			.life_seconds = deltatime(IKE_SA_LIFETIME_DEFAULT) /* When this SA expires (seconds) */
-		};
 
 		struct isakmp_transform trans;
 		pb_stream trans_pbs;
 
 		if (!in_struct(&trans, &isakmp_isakmp_transform_desc,
-			       &proposal_pbs, &trans_pbs)) {
-			return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
-		}
+			       &proposal_pbs, &trans_pbs))
+			return BAD_PROPOSAL_SYNTAX;
 
 		if (trans.isat_transnum <= last_transnum) {
 			/* picky, picky, picky */
 			loglog(RC_LOG_SERIOUS,
 				"Transform Numbers are not monotonically increasing in Oakley Proposal");
-			return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+			return BAD_PROPOSAL_SYNTAX;
 		}
 		last_transnum = trans.isat_transnum;
 
@@ -1232,7 +974,7 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 			       "expected KEY_IKE but found %s in Oakley Transform",
 			       enum_show(&isakmp_transformid_names,
 					 trans.isat_transid));
-			return INVALID_TRANSFORM_ID;	/* reject whole SA */
+			return INVALID_TRANSFORM_ID;
 		}
 
 		u_char *attr_start = trans_pbs.cur;
@@ -1242,17 +984,15 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 
 		lset_t seen_attrs = LEMPTY,
 		       seen_durations = LEMPTY;
-		err_t ugh = NULL;       /* set to diagnostic when attr problem detected */
 
 		while (pbs_left(&trans_pbs) >= isakmp_oakley_attribute_desc.size) {
 			struct isakmp_attribute a;
 			pb_stream attr_pbs;
-			uint32_t val; /* room for larger values */
+			u_int32_t val; /* room for larger values */
 
 			if (!in_struct(&a, &isakmp_oakley_attribute_desc,
-				       &trans_pbs, &attr_pbs)) {
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
-			}
+				       &trans_pbs, &attr_pbs))
+				return BAD_PROPOSAL_SYNTAX;
 
 			passert((a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK) <
 				LELEM_ROOF);
@@ -1264,7 +1004,7 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 				       enum_show(&oakley_attr_names,
 						 a.isaat_af_type),
 				       trans.isat_transnum);
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 			}
 
 			seen_attrs |= LELEM(
@@ -1293,26 +1033,47 @@ notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,		/* body of input SA Payl
 
 			switch (a.isaat_af_type) {
 			case OAKLEY_ENCRYPTION_ALGORITHM | ISAKMP_ATTR_AF_TV:
-			{
-				const struct encrypt_desc *encrypter = ikev1_get_ike_encrypt_desc(val);
-				if (encrypter == NULL) {
+				if (ike_alg_enc_ok(val, 0, c->alg_info_ike,
+						   &ugh, ugh_buf,
+						   sizeof(ugh_buf))) {
+					/* if (ike_alg_enc_present(val)) { */
+					ta.encrypt = val;
+					ta.encrypter =
+						crypto_get_encrypter(val);
+					ta.enckeylen = ta.encrypter->keydeflen;
+				} else switch (val) {
+				case OAKLEY_3DES_CBC:
+					ta.encrypt = val;
+					ta.encrypter =
+						crypto_get_encrypter(val);
+					break;
+
+				case OAKLEY_DES_CBC:
+					libreswan_log("1DES is not encryption");
+				/* FALL THROUGH */
+				default:
 					ugh = builddiag("%s is not supported",
 							enum_show(&oakley_enc_names,
 								  val));
-					break;
 				}
-				ta.ta_encrypt = encrypter;
-				ta.enckeylen = ta.ta_encrypt->keydeflen;
 				break;
-			}
 
 			case OAKLEY_HASH_ALGORITHM | ISAKMP_ATTR_AF_TV:
-				ta.ta_prf = ikev1_get_ike_prf_desc(val);
-				if (ta.ta_prf == NULL) {
+				if (ike_alg_hash_present(val)) {
+					ta.prf_hash = val;
+					ta.prf_hasher = crypto_get_hasher(val);
+				} else switch (val) {
+				case OAKLEY_MD5:
+				case OAKLEY_SHA1:
+					ta.prf_hash = val;
+					ta.prf_hasher = crypto_get_hasher(val);
+					break;
+				default:
 					ugh = builddiag("%s is not supported",
 							enum_show(&oakley_hash_names,
 								  val));
 				}
+/* #endif */
 				break;
 
 			case OAKLEY_AUTHENTICATION_METHOD | ISAKMP_ATTR_AF_TV:
@@ -1360,17 +1121,18 @@ psk_common:
 					if ((iap & POLICY_PSK) == LEMPTY) {
 						ugh = "policy does not allow OAKLEY_PRESHARED_KEY authentication";
 					} else {
-						/* check that we can find a proper preshared secret */
-						pss = get_psk(c);
-
-						if (pss == NULL)
+						/* check that we can find a preshared secret */
+						if (get_preshared_secret(c)
+						    == NULL)
 						{
 							char mid[IDTOA_BUF],
 							     hid[IDTOA_BUF];
 
 							idtoa(&c->spd.this.id, mid,
 							      sizeof(mid));
-							if (remote_id_was_instantiated(c)) {
+							if (his_id_was_instantiated(
+									c))
+							{
 								strcpy(hid,
 								       "%any");
 							} else {
@@ -1381,8 +1143,6 @@ psk_common:
 							ugh = builddiag(
 								"Can't authenticate: no preshared key found for `%s' and `%s'",
 								mid, hid);
-						} else {
-							DBG(DBG_PRIVATE, DBG_dump_chunk("User PSK:", *pss));
 						}
 						ta.auth = OAKLEY_PRESHARED_KEY;
 					}
@@ -1449,8 +1209,8 @@ rsasig_common:
 			break;
 
 			case OAKLEY_GROUP_DESCRIPTION | ISAKMP_ATTR_AF_TV:
-				ta.ta_dh = ikev1_get_ike_dh_desc(val);
-				if (ta.ta_dh == NULL) {
+				ta.group = lookup_group(val);
+				if (ta.group == NULL) {
 					ugh = builddiag(
 						"OAKLEY_GROUP %d not supported",
 						val);
@@ -1467,7 +1227,7 @@ rsasig_common:
 						       "attribute OAKLEY_LIFE_TYPE value %s repeated",
 						       enum_show(&oakley_lifetime_names,
 								 val));
-						return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+						return BAD_PROPOSAL_SYNTAX;
 					}
 					seen_durations |= LELEM(val);
 					life_type = val;
@@ -1494,11 +1254,13 @@ rsasig_common:
 
 				switch (life_type) {
 				case OAKLEY_LIFE_SECONDS:
-					if (val > IKE_SA_LIFETIME_MAXIMUM)
+					if (val >
+					    OAKLEY_ISAKMP_SA_LIFETIME_MAXIMUM)
 					{
-						libreswan_log("warning: peer requested IKE lifetime of %" PRIu32 " seconds which we capped at our limit of %d seconds",
-							val, IKE_SA_LIFETIME_MAXIMUM);
-						val = IKE_SA_LIFETIME_MAXIMUM;
+						libreswan_log("warning: peer requested IKE lifetime of %lu seconds which we capped at our limit of %d seconds",
+								(long) val,
+								OAKLEY_ISAKMP_SA_LIFETIME_MAXIMUM);
+						val = OAKLEY_ISAKMP_SA_LIFETIME_MAXIMUM;
 					}
 					ta.life_seconds = deltatime(val);
 					break;
@@ -1511,27 +1273,45 @@ rsasig_common:
 				break;
 
 			case OAKLEY_KEY_LENGTH | ISAKMP_ATTR_AF_TV:
-				if (!LHAS(seen_attrs, OAKLEY_ENCRYPTION_ALGORITHM)) {
+				if (!LHAS(seen_attrs,
+					  OAKLEY_ENCRYPTION_ALGORITHM)) {
 					ugh = "OAKLEY_KEY_LENGTH attribute not preceded by OAKLEY_ENCRYPTION_ALGORITHM attribute";
 					break;
 				}
-				/* because the encrypt algorithm wasn't valid? */
-				if (ta.ta_encrypt == NULL) {
+				if (ta.encrypter == NULL) {
 					ugh = "NULL encrypter with seen OAKLEY_ENCRYPTION_ALGORITHM";
 					break;
 				}
 				/*
-				 * check if this keylen is compatible
-				 * with specified alg_info_ike.
+				 * check if this keylen is compatible with
+				 * specified alg_info_ike
 				 */
-				if (!encrypt_has_key_bit_length(ta.ta_encrypt, val)) {
+				if (!ike_alg_enc_ok(ta.encrypt, val,
+						    c->alg_info_ike, NULL,
+						    ugh_buf,
+						    sizeof(ugh_buf)))
 					ugh = "peer proposed key_len not valid for encrypt algo setup specified";
-					break;
-				}
 
 				ta.enckeylen = val;
 				break;
+#if 0                           /* not yet supported */
+			case OAKLEY_GROUP_TYPE | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_PRF | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_FIELD_SIZE | ISAKMP_ATTR_AF_TV:
 
+			case OAKLEY_GROUP_PRIME | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_GROUP_PRIME | ISAKMP_ATTR_AF_TLV:
+			case OAKLEY_GROUP_GENERATOR_ONE | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_GROUP_GENERATOR_ONE | ISAKMP_ATTR_AF_TLV:
+			case OAKLEY_GROUP_GENERATOR_TWO | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_GROUP_GENERATOR_TWO | ISAKMP_ATTR_AF_TLV:
+			case OAKLEY_GROUP_CURVE_A | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_GROUP_CURVE_A | ISAKMP_ATTR_AF_TLV:
+			case OAKLEY_GROUP_CURVE_B | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_GROUP_CURVE_B | ISAKMP_ATTR_AF_TLV:
+			case OAKLEY_GROUP_ORDER | ISAKMP_ATTR_AF_TV:
+			case OAKLEY_GROUP_ORDER | ISAKMP_ATTR_AF_TLV:
+#endif
 			default:
 				ugh = "unsupported OAKLEY attribute";
 				break;
@@ -1546,54 +1326,19 @@ rsasig_common:
 			}
 		}
 
-		/* If ugh != NULL, an attr error has been detected and reported */
-
 		/*
-		 * this do {} while (FALSE) construct allows code to use "break"
-		 * to reject this transform and to move on to next (if any).
+		 * ML: at last check for allowed transforms in alg_info_ike
 		 */
+		if (ugh == NULL) {
+			if (!ike_alg_ok_final(ta.encrypt, ta.enckeylen,
+					      ta.prf_hash,
+					      ta.group != NULL ?
+						ta.group->group : 65535,
+					      c->alg_info_ike))
+				ugh = "OAKLEY proposal refused";
+		}
 
-		do {
-			if (ugh != NULL)
-				break;	/* reject transform */
-
-			if ((st->st_policy & POLICY_PSK) &&
-			    pss != &empty_chunk &&
-			    pss != NULL &&
-			    ta.ta_prf != NULL) {
-				const size_t key_size_min = crypt_prf_fips_key_size_min(ta.ta_prf);
-
-				if (pss->len < key_size_min) {
-					if (libreswan_fipsmode()) {
-						loglog(RC_LOG_SERIOUS,
-							"FIPS Error: connection %s PSK length of %zu bytes is too short for %s PRF in FIPS mode (%zu bytes required)",
-							st->st_connection->name,
-							pss->len,
-							ta.ta_prf->common.name,
-							key_size_min);
-						break;	/* reject transform */
-					} else {
-						libreswan_log("WARNING: connection %s PSK length of %zu bytes is too short for %s PRF in FIPS mode (%zu bytes required)",
-							st->st_connection->name,
-							pss->len,
-							ta.ta_prf->common.name,
-							key_size_min);
-					}
-				}
-
-			}
-
-			/*
-			 * ML: at last check for allowed transforms in alg_info_ike
-			 */
-			if (!ikev1_verify_ike(&ta, c->alg_info_ike)) {
-				/*
-				 * already logged; UGH acts as a skip
-				 * rest of checks flag
-				 */
-				break;	/* reject transform */
-			}
-
+		if (ugh == NULL) {
 			/* a little more checking is in order */
 			{
 				lset_t missing =
@@ -1609,13 +1354,11 @@ rsasig_common:
 					       bitnamesof(oakley_attr_bit_names,
 							  missing),
 					       trans.isat_transnum);
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 				}
 			}
-
-			/*
-			 * We must have liked this transform.
-			 * Let's finish early and leave.
+			/* We must have liked this transform.
+			 * Lets finish early and leave.
 			 */
 
 			DBG(DBG_PARSING | DBG_CRYPT,
@@ -1629,8 +1372,9 @@ rsasig_common:
 				pb_stream r_trans_pbs;
 
 				/* Situation */
-				passert(out_struct(&ipsecdoisit, &ipsec_sit_desc,
-						   r_sa_pbs, NULL));
+				if (!out_struct(&ipsecdoisit, &ipsec_sit_desc,
+						r_sa_pbs, NULL))
+					impossible();
 
 				/* Proposal */
 #ifdef EMIT_ISAKMP_SPI
@@ -1639,15 +1383,17 @@ rsasig_common:
 				r_proposal.isap_spisize = 0;
 #endif
 				r_proposal.isap_notrans = 1;
-				passert(out_struct(&r_proposal,
-						   &isakmp_proposal_desc,
-						   r_sa_pbs,
-						   &r_proposal_pbs));
+				if (!out_struct(&r_proposal,
+						&isakmp_proposal_desc,
+						r_sa_pbs,
+						&r_proposal_pbs))
+					impossible();
 
 				/* SPI */
 #ifdef EMIT_ISAKMP_SPI
-				passert(out_raw(my_cookie, COOKIE_SIZE,
-						&r_proposal_pbs, "SPI"));
+				if (!out_raw(my_cookie, COOKIE_SIZE,
+					     &r_proposal_pbs, "SPI"))
+					impossible();
 				r_proposal.isap_spisize = COOKIE_SIZE;
 #else
 				/* none (0) */
@@ -1655,13 +1401,15 @@ rsasig_common:
 
 				/* Transform */
 				r_trans.isat_np = ISAKMP_NEXT_NONE;
-				passert(out_struct(&r_trans,
-						   &isakmp_isakmp_transform_desc,
-						   &r_proposal_pbs,
-						   &r_trans_pbs));
+				if (!out_struct(&r_trans,
+						&isakmp_isakmp_transform_desc,
+						&r_proposal_pbs,
+						&r_trans_pbs))
+					impossible();
 
-				passert(out_raw(attr_start, attr_len,
-						&r_trans_pbs, "attributes"));
+				if (!out_raw(attr_start, attr_len,
+					     &r_trans_pbs, "attributes"))
+					impossible();
 				close_output_pbs(&r_trans_pbs);
 				close_output_pbs(&r_proposal_pbs);
 				close_output_pbs(r_sa_pbs);
@@ -1674,18 +1422,17 @@ rsasig_common:
 
 			/* copy over the results */
 			st->st_oakley = ta;
-			return NOTHING_WRONG;	/* accept SA */
-		} while (FALSE);
+			return NOTHING_WRONG;
+		}
 
-		/* transform rejected: on to next transform */
-
+		/* on to next transform */
 		no_trans_left--;
 
 		if (trans.isat_np == ISAKMP_NEXT_NONE) {
 			if (no_trans_left != 0) {
 				loglog(RC_LOG_SERIOUS,
 				       "number of Transform Payloads disagrees with Oakley Proposal Payload");
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 			}
 			break;
 		}
@@ -1693,11 +1440,11 @@ rsasig_common:
 			loglog(RC_LOG_SERIOUS,
 			       "unexpected %s payload in Oakley Proposal",
 			       enum_show(&ikev1_payload_names, proposal.isap_np));
-			return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+			return BAD_PROPOSAL_SYNTAX;
 		}
 	}
 	loglog(RC_LOG_SERIOUS, "no acceptable Oakley Transform");
-	return NO_PROPOSAL_CHOSEN;	/* reject whole SA */
+	return NO_PROPOSAL_CHOSEN;
 }
 
 /* Initialize st_oakley field of state for use when initiating in
@@ -1712,48 +1459,40 @@ rsasig_common:
 /* XXX MCR. I suspect that actually all of this is redundent */
 bool init_aggr_st_oakley(struct state *st, lset_t policy)
 {
-	const struct connection *c = st->st_connection;
+	struct trans_attrs ta;
+	struct db_attr  *enc, *hash, *auth, *grp;
+	struct db_trans *trans;
+	struct db_prop  *prop;
+	struct db_prop_conj *cprop;
+	struct db_sa    *revised_sadb;
+	struct connection *c = st->st_connection;
 
-	/*
-	 * Construct the proposals by combining ALG_INFO_IKE with the
-	 * AUTH (proof of identity) extracted from the aggressive mode
-	 * SADB.  As if by magic, attrs[2] is always the
-	 * authentication method.
-	 *
-	 * XXX: Should replace IKEv1_oakley_am_sadb() with a simple
-	 * map to the auth method.
-	 */
-	struct db_sa *revised_sadb;
-	{
-		const struct db_sa *sadb = IKEv1_oakley_am_sadb(policy, c);
-		const struct db_attr *auth = &sadb->prop_conjs[0].props[0].trans[0].attrs[2];
-		passert(auth->type.oakley == OAKLEY_AUTHENTICATION_METHOD);
-		enum ikev1_auth_method auth_method = auth->val;
-		/*
-		 * Max transforms == 2 - Multiple transforms, 1 DH
-		 * group
-		 */
-		revised_sadb = oakley_alg_makedb(c->alg_info_ike,
-						 auth_method, TRUE);
-	}
+	zero(&ta);	/* ??? may not NULL pointer fields */
+
+	/* When this SA expires (seconds) */
+	ta.life_seconds = st->st_connection->sa_ike_life_seconds;
+	ta.life_kilobytes = 1000000;
+
+	/* Max transforms == 2 - Multiple transforms, 1 DH group */
+	revised_sadb = oakley_alg_makedb(st->st_connection->alg_info_ike,
+					 IKEv1_oakley_am_sadb(policy, c), TRUE);
 
 	if (revised_sadb == NULL)
 		return FALSE;
 
 	passert(revised_sadb->prop_conj_cnt == 1);
-	const struct db_prop_conj *cprop = &revised_sadb->prop_conjs[0];
+	cprop = &revised_sadb->prop_conjs[0];
 
 	passert(cprop->prop_cnt == 1);
-	const struct db_prop  *prop = &cprop->props[0];
+	prop = &cprop->props[0];
 
-	const struct db_trans *trans = &prop->trans[0];
+	trans = &prop->trans[0];
 
 	passert(trans->attr_cnt == 4 || trans->attr_cnt == 5);
-
-	const struct db_attr *enc  = &trans->attrs[0];
-	const struct db_attr *hash = &trans->attrs[1];
-	const struct db_attr *auth = &trans->attrs[2];
-	const struct db_attr *grp  = &trans->attrs[3];
+	enc  = &trans->attrs[0];
+	hash = &trans->attrs[1];
+	auth = &trans->attrs[2];
+	grp  = &trans->attrs[3];
 
 	DBG(DBG_CONTROL,
 	    DBG_log("initiating aggressive mode with IKE=E=%d-H=%d-M=%d",
@@ -1762,35 +1501,29 @@ bool init_aggr_st_oakley(struct state *st, lset_t policy)
 		    grp->val));
 
 	passert(enc->type.oakley == OAKLEY_ENCRYPTION_ALGORITHM);
-
-
-	struct trans_attrs ta = {
-		/* When this SA expires (seconds) */
-		.life_seconds = c->sa_ike_life_seconds,
-		.life_kilobytes = 1000000,
-		.ta_encrypt = ikev1_get_ike_encrypt_desc(enc->val)
-	};
-
-	passert(ta.ta_encrypt != NULL);
+	ta.encrypt = enc->val;         /* OAKLEY_ENCRYPTION_ALGORITHM */
+	ta.encrypter = crypto_get_encrypter(ta.encrypt);
+	passert(ta.encrypter != NULL);
 
 	if (trans->attr_cnt == 5) {
 		struct db_attr *enc_keylen;
 		enc_keylen = &trans->attrs[4];
 		ta.enckeylen = enc_keylen->val;
 	} else {
-		ta.enckeylen = ta.ta_encrypt->keydeflen;
+		ta.enckeylen = ta.encrypter->keydeflen;
 	}
 
 	passert(hash->type.oakley == OAKLEY_HASH_ALGORITHM);
-	ta.ta_prf = ikev1_get_ike_prf_desc(hash->val);
-	passert(ta.ta_prf != NULL);
+	ta.prf_hash = hash->val;           /* OAKLEY_HASH_ALGORITHM */
+	ta.prf_hasher = crypto_get_hasher(ta.prf_hash);
+	passert(ta.prf_hasher != NULL);
 
 	passert(auth->type.oakley == OAKLEY_AUTHENTICATION_METHOD);
 	ta.auth   = auth->val;         /* OAKLEY_AUTHENTICATION_METHOD */
 
 	passert(grp->type.oakley == OAKLEY_GROUP_DESCRIPTION);
-	ta.ta_dh = ikev1_get_ike_dh_desc(grp->val); /* OAKLEY_GROUP_DESCRIPTION */
-	passert(ta.ta_dh != NULL);
+	ta.group = lookup_group(grp->val); /* OAKLEY_GROUP_DESCRIPTION */
+	passert(ta.group != NULL);
 
 	st->st_oakley = ta;
 
@@ -1810,7 +1543,7 @@ bool init_aggr_st_oakley(struct state *st, lset_t policy)
  * proposal is emitted into it.
  *
  * If "selection" is true, the SA is supposed to represent the
- * single transform that the peer has accepted.
+ * single tranform that the peer has accepted.
  * ??? We only check that it is acceptable, not that it is one that we offered!
  *
  * Only IPsec DOI is accepted (what is the ISAKMP DOI?).
@@ -1823,6 +1556,13 @@ bool init_aggr_st_oakley(struct state *st, lset_t policy)
  * This routine is used by quick_inI1_outR1() and quick_inR1_outI2().
  */
 
+static const struct ipsec_trans_attrs null_ipsec_trans_attrs = {
+	.spi = 0,                                               /* spi */
+	.life_seconds = { SA_LIFE_DURATION_DEFAULT },		/* life_seconds */
+	.life_kilobytes = SA_LIFE_DURATION_K_DEFAULT,           /* life_kilobytes */
+	.encapsulation = ENCAPSULATION_MODE_UNSPECIFIED,        /* encapsulation */
+};
+
 static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				  struct ipsec_trans_attrs *attrs,
 				  pb_stream *prop_pbs,
@@ -1831,7 +1571,7 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				  int previous_transnum, /* or -1 if none */
 				  bool selection,
 				  bool is_last,
-				  uint8_t proto,
+				  u_int8_t proto,
 				  struct state *st) /* current state object */
 {
 	lset_t seen_attrs = LEMPTY,
@@ -1839,7 +1579,7 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 #ifdef HAVE_LABELED_IPSEC
 	bool seen_secctx_attr = FALSE;
 #endif
-	uint16_t life_type = 0;	/* initialized to silence GCC */
+	u_int16_t life_type = 0;
 	const struct oakley_group_desc *pfs_group = NULL;
 
 	if (!in_struct(trans, trans_desc, prop_pbs, trans_pbs))
@@ -1873,32 +1613,15 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 		return FALSE;
 	}
 
-	*attrs = (struct ipsec_trans_attrs) {
-		.spi = 0,                                               /* spi */
-		.life_seconds = DELTATIME_INIT(IPSEC_SA_LIFETIME_DEFAULT),	/* life_seconds */
-		.life_kilobytes = SA_LIFE_DURATION_K_DEFAULT,           /* life_kilobytes */
-		.encapsulation = ENCAPSULATION_MODE_UNSPECIFIED,        /* encapsulation */
-	};
-
-	switch (proto) {
-	case PROTO_IPCOMP:
-		attrs->transattrs.ta_comp = trans->isat_transid;
-		break;
-	case PROTO_IPSEC_ESP:
-		attrs->transattrs.ta_encrypt = ikev1_get_kernel_encrypt_desc(trans->isat_transid);
-		break;
-	case PROTO_IPSEC_AH:
-		break;
-	default:
-		bad_case(proto);
-	}
+	*attrs = null_ipsec_trans_attrs;
+	attrs->transattrs.encrypt = trans->isat_transid;
 
 	while (pbs_left(trans_pbs) >= isakmp_ipsec_attribute_desc.size) {
 		struct isakmp_attribute a;
 		pb_stream attr_pbs;
 		enum_names *vdesc;
-		uint16_t ty;
-		uint32_t val;                          /* room for larger value */
+		u_int16_t ty;
+		u_int32_t val;                          /* room for larger value */
 		bool ipcomp_inappropriate = (proto == PROTO_IPCOMP);  /* will get reset if OK */
 
 		if (!in_struct(&a, &isakmp_ipsec_attribute_desc, trans_pbs,
@@ -1985,13 +1708,12 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 
 			switch (life_type) {
 			case SA_LIFE_TYPE_SECONDS:
-			{
 				/*
 				 * Silently limit duration to our maximum.
 				 *
 				 * Note:
 				 *
-				 * GCC now complains about comparisons between
+				 * GCC now complains about comparisions between
 				 * signed and unsigned values.  This is good:
 				 * should the comparison be done as if the
 				 * unsigned representation were signed or as if
@@ -2001,23 +1723,18 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				 *
 				 * We know that time_t can represent all
 				 * values between 0 and SA_LIFE_DURATION_MAXIMUM.
-				 * It is safe to cast val (of type uint32_t)
+				 * It is safe to cast val (of type u_int32_t)
 				 * to time_t (some signed type) AFTER checking
 				 * that val does not exceed
 				 * SA_LIFE_DURATION_MAXIMUM.
 				 */
-				unsigned int lifemax = IPSEC_SA_LIFETIME_MAXIMUM;
-#ifdef FIPS_CHECK
-				if (libreswan_fipsmode())
-					lifemax = FIPS_IPSEC_SA_LIFETIME_MAXIMUM;
-#endif
-				attrs->life_seconds = val > lifemax ?
-					deltatime(lifemax) :
+				attrs->life_seconds =
+				    val > SA_LIFE_DURATION_MAXIMUM ?
+					deltatime(SA_LIFE_DURATION_MAXIMUM) :
 				    (time_t)val > deltasecs(st->st_connection->sa_ipsec_life_seconds) ?
 					st->st_connection->sa_ipsec_life_seconds :
 				    deltatime(val);
 				break;
-			}
 			case SA_LIFE_TYPE_KBYTES:
 				attrs->life_kilobytes = val;
 				break;
@@ -2035,7 +1752,7 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				loglog(RC_COMMENT,
 				       "IPCA (IPcomp SA) contains GROUP_DESCRIPTION.  Ignoring inappropriate attribute.");
 			}
-			pfs_group = ikev1_get_ike_dh_desc(val);
+			pfs_group = lookup_group(val);
 			if (pfs_group == NULL) {
 				loglog(RC_LOG_SERIOUS,
 				       "OAKLEY_GROUP %" PRIu32 " not supported for PFS",
@@ -2052,6 +1769,14 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				DBG(DBG_NATT,
 				    DBG_log("NAT-T non-encap: Installing IPsec SA without ENCAP, st->hidden_variables.st_nat_traversal is %s",
 					    bitnamesof(natt_bit_names, st->hidden_variables.st_nat_traversal)));
+				if (st->hidden_variables.st_nat_traversal &
+				    NAT_T_DETECTED) {
+					loglog(RC_LOG_SERIOUS,
+					       "%s must only be used if NAT-Traversal is not detected",
+					       enum_name(&enc_mode_names,
+							 val));
+					return FALSE;
+				}
 				break;
 
 			case ENCAPSULATION_MODE_UDP_TRANSPORT_DRAFTS:
@@ -2059,6 +1784,25 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				DBG(DBG_NATT,
 				    DBG_log("NAT-T draft: Installing IPsec SA with ENCAP, st->hidden_variables.st_nat_traversal is %s",
 					    bitnamesof(natt_bit_names, st->hidden_variables.st_nat_traversal)));
+				if (st->hidden_variables.st_nat_traversal &
+				    NAT_T_WITH_ENCAPSULATION_RFC_VALUES) {
+					loglog(RC_LOG_SERIOUS,
+					       "%s must only be used with old IETF drafts",
+					       enum_name(&enc_mode_names,
+							 val));
+					if (st->st_connection->remotepeertype
+					    != CISCO) {
+						return FALSE;
+					}
+					DBG_log("Allowing, as this may be due to remote_peer Cisco rekey");
+				} else if (!(st->hidden_variables.st_nat_traversal &
+					   NAT_T_DETECTED)) {
+					loglog(RC_LOG_SERIOUS,
+					       "%s must only be used if NAT-Traversal is detected",
+					       enum_name(&enc_mode_names,
+							 val));
+					return FALSE;
+				}
 				break;
 
 			case ENCAPSULATION_MODE_UDP_TRANSPORT_RFC:
@@ -2066,6 +1810,20 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 				DBG(DBG_NATT,
 				    DBG_log("NAT-T RFC: Installing IPsec SA with ENCAP, st->hidden_variables.st_nat_traversal is %s",
 					    bitnamesof(natt_bit_names, st->hidden_variables.st_nat_traversal)));
+				if (!(st->hidden_variables.st_nat_traversal &
+				     NAT_T_DETECTED)) {
+					loglog(RC_LOG_SERIOUS,
+					       "%s must only be used if NAT-Traversal is detected",
+					       enum_name(&enc_mode_names, val));
+					return FALSE;
+				} else if (!(st->hidden_variables.st_nat_traversal &
+					    NAT_T_WITH_ENCAPSULATION_RFC_VALUES)) {
+					loglog(RC_LOG_SERIOUS,
+					       "%s must only be used with NAT-T RFC",
+					       enum_name(&enc_mode_names,
+							 val));
+					return FALSE;
+				}
 				break;
 
 			default:
@@ -2090,34 +1848,10 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 			break;
 
 		case AUTH_ALGORITHM | ISAKMP_ATTR_AF_TV:
-			attrs->transattrs.ta_integ = ikev1_get_kernel_integ_desc(val);
-			if (attrs->transattrs.ta_integ == NULL) {
-				/*
-				 * Caller will also see NULL and
-				 * assume that things should stumble
-				 * on to the next algorithm.
-				 *
-				 * Either straight AH, or ESP
-				 * containing AUTH; or what?
-				 */
-				loglog(RC_LOG_SERIOUS,
-				       "IKEv1 %s integrity algorithm %s not supported",
-				       (proto == PROTO_IPSEC_ESP ? "ESP" : "AH"),
-				       enum_show(&ah_transformid_names, val));
-			}
+			attrs->transattrs.integ_hash = val;
 			break;
 
 		case KEY_LENGTH | ISAKMP_ATTR_AF_TV:
-			if (attrs->transattrs.ta_encrypt == NULL) {
-				loglog(RC_LOG_SERIOUS,
-				       "IKEv1 key-length attribute without encryption algorithm");
-				return false;
-			}
-			if (!encrypt_has_key_bit_length(attrs->transattrs.ta_encrypt, val)) {
-				loglog(RC_LOG_SERIOUS,
-				       "IKEv1 key-length attribute without encryption algorithm");
-				return false;
-			}
 			attrs->transattrs.enckeylen = val;
 			break;
 
@@ -2188,52 +1922,34 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 		}
 	}
 
-	/*
-	 * For ESP, check if the encryption key length is required.
-	 *
-	 * If a required key length was missing force the proposal to
-	 * be rejected by settinf .ta_encrypt=NULL.
-	 *
-	 * If an optional key-length is missing set it to the correct
-	 * value (.keydeflen) (which can be 0).  This is safe since
-	 * the code echoing back the proposal never emits a keylen
-	 * when .keylen_omitted
-	 */
-	if (proto == PROTO_IPSEC_ESP && !LHAS(seen_attrs, KEY_LENGTH) &&
-	    attrs->transattrs.ta_encrypt != NULL) {
-		if (attrs->transattrs.ta_encrypt->keylen_omitted) {
-			attrs->transattrs.enckeylen = attrs->transattrs.ta_encrypt->keydeflen;
-		} else {
-			/* ealg requires a key length attr */
-			loglog(RC_LOG_SERIOUS,
-			       "IPsec encryption transform %s did not specify required KEY_LENGTH attribute",
-			       attrs->transattrs.ta_encrypt->common.fqn);
-			attrs->transattrs.ta_encrypt = NULL; /* force rejection */
-		}
-	}
+	/* Check ealg and key length validity */
+	if (proto == PROTO_IPSEC_ESP) {
+		int ipsec_keysize = crypto_req_keysize(CRK_ESPorAH, attrs->transattrs.encrypt);
 
-	/*
-	 * For ESP, if the integrity algorithm (AUTH_ALGORITHM) was
-	 * completly missing, set it to NONE.
-	 *
-	 * This way the caller has sufficient information to
-	 * differentiate between missing integrity (NONE) and unknown
-	 * integrity (NULL) and decide if the proposals combination of
-	 * ESP/AH AEAD and NONE is valid.
-	 *
-	 * For instance, AEAD+[NONE].
-	 */
-	if (proto == PROTO_IPSEC_ESP && !LHAS(seen_attrs, AUTH_ALGORITHM)) {
-		DBG(DBG_PARSING, DBG_log("ES missing INTEG aka AUTH, setting it to NONE"));
-		attrs->transattrs.ta_integ = &ike_alg_integ_none;
+		if (!LHAS(seen_attrs, KEY_LENGTH)) {
+			if (ipsec_keysize != 0) {
+				/* ealg requires a key length attr */
+				loglog(RC_LOG_SERIOUS,
+					"IPsec encryption transform did not specify required KEY_LENGTH attribute");
+				return FALSE;
+			}
+		}
+
+		err_t ugh = check_kernel_encrypt_alg(
+				attrs->transattrs.encrypt,
+				attrs->transattrs.enckeylen);
+		if (ugh != NULL) {
+			loglog(RC_LOG_SERIOUS,
+				"IPsec encryption transform rejected: %s",
+				ugh);
+			return FALSE;
+		}
 	}
 
 	if (proto == PROTO_IPSEC_AH) {
-		if (!LHAS(seen_attrs, AUTH_ALGORITHM)) {
-			loglog(RC_LOG_SERIOUS,
-			       "AUTH_ALGORITHM attribute missing in AH Transform");
-			return false;
-		}
+		DBG(DBG_CONTROL, DBG_log("PROTO AH: we should check registration of attrs->transattrs.integ_hash=%d",
+			attrs->transattrs.integ_hash));
+		/* if not registered, abort early */
 	}
 
 	return TRUE;
@@ -2241,7 +1957,7 @@ static bool parse_ipsec_transform(struct isakmp_transform *trans,
 
 static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to emit */
 			  struct isakmp_transform r_trans,      /* winning transformation within it */
-			  uint8_t np,                          /* Next Payload for proposal */
+			  u_int8_t np,                          /* Next Payload for proposal */
 			  pb_stream *r_sa_pbs,                  /* SA PBS into which to emit */
 			  struct ipsec_proto_info *pi,          /* info about this protocol instance */
 			  struct_desc *trans_desc,              /* descriptor for this transformation */
@@ -2255,8 +1971,9 @@ static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to e
 	/* Proposal */
 	r_proposal.isap_np = np;
 	r_proposal.isap_notrans = 1;
-	passert(out_struct(&r_proposal, &isakmp_proposal_desc, r_sa_pbs,
-			   &r_proposal_pbs));
+	if (!out_struct(&r_proposal, &isakmp_proposal_desc, r_sa_pbs,
+			&r_proposal_pbs))
+		impossible();
 
 	/* allocate and emit our CPI/SPI */
 	if (r_proposal.isap_protoid == PROTO_IPCOMP) {
@@ -2266,10 +1983,11 @@ static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to e
 		 * but we'll ignore that.
 		 */
 		pi->our_spi = get_my_cpi(sr, tunnel_mode);
-		passert(out_raw((u_char *) &pi->our_spi +
-				IPSEC_DOI_SPI_SIZE - IPCOMP_CPI_SIZE,
-				IPCOMP_CPI_SIZE,
-				&r_proposal_pbs, "CPI"));
+		if (!out_raw((u_char *) &pi->our_spi +
+			     IPSEC_DOI_SPI_SIZE - IPCOMP_CPI_SIZE,
+			     IPCOMP_CPI_SIZE,
+			     &r_proposal_pbs, "CPI"))
+			impossible();
 	} else {
 		pi->our_spi = get_ipsec_spi(pi->attrs.spi,
 					    r_proposal.isap_protoid == PROTO_IPSEC_AH ?
@@ -2277,18 +1995,21 @@ static void echo_proposal(struct isakmp_proposal r_proposal,    /* proposal to e
 					    sr,
 					    tunnel_mode);
 		/* XXX should check for errors */
-		passert(out_raw((u_char *) &pi->our_spi, IPSEC_DOI_SPI_SIZE,
-				&r_proposal_pbs, "SPI"));
+		if (!out_raw((u_char *) &pi->our_spi, IPSEC_DOI_SPI_SIZE,
+			     &r_proposal_pbs, "SPI"))
+			impossible();
 	}
 
 	/* Transform */
 	r_trans.isat_np = ISAKMP_NEXT_NONE;
-	passert(out_struct(&r_trans, trans_desc, &r_proposal_pbs, &r_trans_pbs));
+	if (!out_struct(&r_trans, trans_desc, &r_proposal_pbs, &r_trans_pbs))
+		impossible();
 
 	/* Transform Attributes: pure echo */
 	trans_pbs->cur = trans_pbs->start + sizeof(struct isakmp_transform);
-	passert(out_raw(trans_pbs->cur, pbs_left(trans_pbs),
-			&r_trans_pbs, "attributes"));
+	if (!out_raw(trans_pbs->cur, pbs_left(trans_pbs),
+		     &r_trans_pbs, "attributes"))
+		impossible();
 
 	close_output_pbs(&r_trans_pbs);
 	close_output_pbs(&r_proposal_pbs);
@@ -2301,7 +2022,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				   struct state *st)            /* current state object */
 {
 	const struct connection *c = st->st_connection;
-	uint32_t ipsecdoisit;
+	u_int32_t ipsecdoisit;
 	pb_stream next_proposal_pbs;
 
 	struct isakmp_proposal next_proposal;
@@ -2314,18 +2035,18 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 		loglog(RC_LOG_SERIOUS, "Unknown or unsupported DOI %s",
 		       enum_show(&doi_names, sa->isasa_doi));
 		/* XXX Could send notification back */
-		return DOI_NOT_SUPPORTED;	/* reject whole SA */
+		return DOI_NOT_SUPPORTED;
 	}
 
 	/* Situation */
 	if (!in_struct(&ipsecdoisit, &ipsec_sit_desc, sa_pbs, NULL))
-		return SITUATION_NOT_SUPPORTED;	/* reject whole SA */
+		return SITUATION_NOT_SUPPORTED;
 
 	if (ipsecdoisit != SIT_IDENTITY_ONLY) {
 		loglog(RC_LOG_SERIOUS, "unsupported IPsec DOI situation (%s)",
 		       bitnamesof(sit_bit_names, ipsecdoisit));
 		/* XXX Could send notification back */
-		return SITUATION_NOT_SUPPORTED;	/* reject whole SA */
+		return SITUATION_NOT_SUPPORTED;
 	}
 
 	/* The rules for IPsec SAs are scattered.
@@ -2343,7 +2064,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 
 	if (!in_struct(&next_proposal, &isakmp_proposal_desc, sa_pbs,
 		       &next_proposal_pbs))
-		return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+		return BAD_PROPOSAL_SYNTAX;
 
 	/* for each conjunction of proposals... */
 	while (next_full) {
@@ -2366,7 +2087,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 			ipcomp_seen = FALSE;
 		int inner_proto = 0;
 		bool tunnel_mode = FALSE;
-		uint16_t well_known_cpi = 0;
+		u_int16_t well_known_cpi = 0;
 
 		pb_stream
 			ah_trans_pbs,
@@ -2396,20 +2117,20 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					 * SPI-sized field.
 					 * See draft-shacham-ippcp-rfc2393bis-05.txt 4.1
 					 */
-					uint8_t filler[IPSEC_DOI_SPI_SIZE -
+					u_int8_t filler[IPSEC_DOI_SPI_SIZE -
 							IPCOMP_CPI_SIZE];
 
 					if (!in_raw(filler, sizeof(filler),
 						    &next_proposal_pbs,
 						    "CPI filler") ||
 					    !all_zero(filler, sizeof(filler)))
-						return INVALID_SPI;	/* reject whole SA */
+						return INVALID_SPI;
 				} else if (next_proposal.isap_spisize !=
 					   IPCOMP_CPI_SIZE) {
 					loglog(RC_LOG_SERIOUS,
 					       "IPsec Proposal with improper CPI size (%u)",
 					       next_proposal.isap_spisize);
-					return INVALID_SPI;	/* reject whole SA */
+					return INVALID_SPI;
 				}
 
 				/* We store CPI in the low order of a network order
@@ -2421,7 +2142,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					    IPCOMP_CPI_SIZE,
 					    IPCOMP_CPI_SIZE,
 					    &next_proposal_pbs, "CPI"))
-					return INVALID_SPI;	/* reject whole SA */
+					return INVALID_SPI;
 
 				/* If sanity ruled, CPIs would have to be such that
 				 * the SAID (the triple (CPI, IPCOM, destination IP))
@@ -2439,7 +2160,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					if (next_spi == 0) {
 						loglog(RC_LOG_SERIOUS,
 						       "IPsec Proposal contains well-known CPI that I cannot uniquify");
-						return INVALID_SPI;	/* reject whole SA */
+						return INVALID_SPI;
 					}
 					break;
 				default:
@@ -2448,9 +2169,9 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					    ntohl(next_spi) >
 					    IPCOMP_LAST_NEGOTIATED) {
 						loglog(RC_LOG_SERIOUS,
-						       "IPsec Proposal contains CPI from non-negotiated range (0x%" PRIx32 ")",
-						       ntohl(next_spi));
-						return INVALID_SPI;	/* reject whole SA */
+						       "IPsec Proposal contains CPI from non-negotiated range (0x%lx)",
+						       (unsigned long) ntohl(next_spi));
+						return INVALID_SPI;
 					}
 					break;
 				}
@@ -2462,13 +2183,13 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					loglog(RC_LOG_SERIOUS,
 					       "IPsec Proposal with improper SPI size (%u)",
 					       next_proposal.isap_spisize);
-					return INVALID_SPI;	/* reject whole SA */
+					return INVALID_SPI;
 				}
 
 				if (!in_raw((u_char *)&next_spi,
 					    sizeof(next_spi),
 					    &next_proposal_pbs, "SPI"))
-					return INVALID_SPI;	/* reject whole SA */
+					return INVALID_SPI;
 
 				/* SPI value 0 is invalid and values 1-255 are reserved to IANA.
 				 * RFC 2402 (ESP) 2.4, RFC 2406 (AH) 2.1
@@ -2476,9 +2197,9 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				 */
 				if (ntohl(next_spi) < IPSEC_DOI_SPI_MIN) {
 					loglog(RC_LOG_SERIOUS,
-					       "IPsec Proposal contains invalid SPI (0x%" PRIx32 ")",
-					       ntohl(next_spi));
-					return INVALID_SPI;	/* reject whole SA */
+					       "IPsec Proposal contains invalid SPI (0x%lx)",
+					       (unsigned long) ntohl(next_spi));
+					return INVALID_SPI;
 				}
 			}
 
@@ -2493,7 +2214,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				if (ah_seen) {
 					loglog(RC_LOG_SERIOUS,
 					       "IPsec SA contains two simultaneous AH Proposals");
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 				}
 				ah_seen = TRUE;
 				ah_prop_pbs = next_proposal_pbs;
@@ -2505,7 +2226,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				if (esp_seen) {
 					loglog(RC_LOG_SERIOUS,
 					       "IPsec SA contains two simultaneous ESP Proposals");
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 				}
 				esp_seen = TRUE;
 				esp_prop_pbs = next_proposal_pbs;
@@ -2517,7 +2238,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				if (ipcomp_seen) {
 					loglog(RC_LOG_SERIOUS,
 					       "IPsec SA contains two simultaneous IPCOMP Proposals");
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 				}
 				ipcomp_seen = TRUE;
 				ipcomp_prop_pbs = next_proposal_pbs;
@@ -2530,7 +2251,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				       "unexpected Protocol ID (%s) in IPsec Proposal",
 				       enum_show(&ikev1_protocol_names,
 						 next_proposal.isap_protoid));
-				return INVALID_PROTOCOL_ID;	/* reject whole SA */
+				return INVALID_PROTOCOL_ID;
 			}
 
 			/* refill next_proposal */
@@ -2542,12 +2263,12 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				       "unexpected in Proposal: %s",
 				       enum_show(&ikev1_payload_names,
 						 next_proposal.isap_np));
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 			}
 
 			if (!in_struct(&next_proposal, &isakmp_proposal_desc,
 				       sa_pbs, &next_proposal_pbs))
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 		} while (next_proposal.isap_proposal == propno);
 
 		/* Now that we have all conjuncts, we should try
@@ -2565,6 +2286,9 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 			int tn;
 
 			for (tn = 0; tn != ah_proposal.isap_notrans; tn++) {
+				int ok_transid = 0;
+				bool ok_auth = TRUE;
+
 				if (!parse_ipsec_transform(&ah_trans,
 							   &ah_attrs,
 							   &ah_prop_pbs,
@@ -2575,26 +2299,12 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 							   tn == ah_proposal.isap_notrans - 1,
 							   PROTO_IPSEC_AH,
 							   st))
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 
 				previous_transnum = ah_trans.isat_transnum;
 
-				/*
-				 * Since, for AH, when integrity is
-				 * missing, the proposal gets rejected
-				 * outright, a NULL here must indicate
-				 * that integrity was present but the
-				 * lookup failed.
-				 */
-				if (ah_attrs.transattrs.ta_integ == NULL) {
-					/* error already logged */
-					DBG(DBG_PARSING,
-					    DBG_log("ignoring AH proposal with unknown integrity"));
-					continue;       /* try another */
-				}
-
 				/* we must understand ah_attrs.transid
-				 * COMBINED with ah_attrs.transattrs.ta_ikev1_integ_hash.
+				 * COMBINED with ah_attrs.transattrs.integ_hash.
 				 * See RFC 2407 "IPsec DOI" section 4.4.3
 				 * The following combinations are legal,
 				 * but we don't implement all of them:
@@ -2605,13 +2315,103 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				 * AH_SHA, AUTH_ALGORITHM_HMAC_SHA1
 				 * AH_DES, AUTH_ALGORITHM_DES_MAC (unimplemented)
 				 */
-				if (ah_trans.isat_transid != ah_attrs.transattrs.ta_integ->integ_ikev1_ah_transform) {
+				/* ??? this switch looks a lot like alg_info_esp_aa2sadb */
+				switch (ah_attrs.transattrs.integ_hash) {
+				case AUTH_ALGORITHM_NONE:
+					loglog(RC_LOG_SERIOUS,
+					       "AUTH_ALGORITHM attribute missing in AH Transform");
+					return BAD_PROPOSAL_SYNTAX;
+
+				case AUTH_ALGORITHM_HMAC_MD5:
+				case AUTH_ALGORITHM_KPDK:
+					ok_transid = AH_MD5;
+					break;
+
+				case AUTH_ALGORITHM_HMAC_SHA1:
+					ok_transid = AH_SHA;
+					break;
+
+				case AUTH_ALGORITHM_DES_MAC:
+					loglog(RC_LOG_SERIOUS,
+					       "AH_DES no longer supported");
+					ok_auth = FALSE;
+					break;
+
+				case AUTH_ALGORITHM_HMAC_SHA2_256:
+					ok_transid = AH_SHA2_256;
+					break;
+
+				case AUTH_ALGORITHM_HMAC_SHA2_384:
+					ok_transid = AH_SHA2_384;
+					break;
+
+				case AUTH_ALGORITHM_HMAC_SHA2_512:
+					ok_transid = AH_SHA2_512;
+					break;
+
+				case AUTH_ALGORITHM_HMAC_RIPEMD:
+					ok_transid = AH_RIPEMD;
+					break;
+
+				case AUTH_ALGORITHM_AES_XCBC:
+					ok_transid = AH_AES_XCBC_MAC;
+					break;
+
+				case AUTH_ALGORITHM_SIG_RSA:
+					loglog(RC_LOG_SERIOUS,
+					       "AH_RSA (RFC4359) not implemented");
+					ok_auth = FALSE;
+					break;
+
+				case AUTH_ALGORITHM_AES_128_GMAC:
+					ok_transid = AH_AES_128_GMAC;
+					break;
+
+				case AUTH_ALGORITHM_AES_192_GMAC:
+					ok_transid = AH_AES_192_GMAC;
+					break;
+
+				case AUTH_ALGORITHM_AES_256_GMAC:
+					ok_transid = AH_AES_256_GMAC;
+					break;
+
+				default:
+					loglog(RC_LOG_SERIOUS,
+					       "Unknown integ algorithm %d not supported",
+							ah_attrs.transattrs.integ_hash);
+					ok_auth = FALSE;
+					break;
+				}
+
+				if (ah_attrs.transattrs.encrypt !=
+				    ok_transid) {
+					struct esb_buf esb;
+
 					loglog(RC_LOG_SERIOUS,
 					       "%s attribute inappropriate in %s Transform",
-					       ah_attrs.transattrs.ta_integ->common.fqn,
+					       enum_showb(&auth_alg_names,
+							 ah_attrs.transattrs.integ_hash,
+							 &esb),
 					       enum_show(&ah_transformid_names,
-							 ah_trans.isat_transid));
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+							 ah_attrs.transattrs.encrypt));
+					return BAD_PROPOSAL_SYNTAX;
+				}
+				/* ??? should test be !ok_auth || !ESP_AALG_PRESENT(ok_transid) */
+				/* ??? why is this called ESP_AALG_PRESENT when we're doing AH? */
+				if (!ok_auth) {
+					struct esb_buf esb;
+
+					DBG(DBG_CONTROL | DBG_CRYPT, {
+						ipstr_buf b;
+						DBG_log("%s attribute unsupported in %s Transform from %s",
+							enum_showb(&auth_alg_names,
+								  ah_attrs.transattrs.integ_hash,
+								  &esb),
+							enum_show(&ah_transformid_names,
+								  ah_attrs.transattrs.encrypt),
+							ipstr(&c->spd.that.host_addr, &b));
+					});
+					continue;       /* try another */
 				}
 				break;                  /* we seem to be happy */
 			}
@@ -2619,7 +2419,9 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				continue; /* we didn't find a nice one */
 
 			/* Check AH proposal with configuration */
-			if (!ikev1_verify_ah(c, &ah_attrs.transattrs)) {
+			if (c->alg_info_esp != NULL &&
+			    !ikev1_verify_ah(ah_attrs.transattrs.integ_hash,
+					c->alg_info_esp)) {
 				continue;
 			}
 			ah_attrs.spi = ah_spi;
@@ -2634,6 +2436,8 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 			int tn;
 
 			for (tn = 0; tn != esp_proposal.isap_notrans; tn++) {
+				err_t ugh;
+
 				if (!parse_ipsec_transform(
 				      &esp_trans,
 				      &esp_attrs,
@@ -2645,32 +2449,103 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				      tn == esp_proposal.isap_notrans - 1,
 				      PROTO_IPSEC_ESP,
 				      st))
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 
 				previous_transnum = esp_trans.isat_transnum;
 
-				/*
-				 * check for allowed transforms in alg_info_esp
-				 */
-				if (!ikev1_verify_esp(c, &esp_attrs.transattrs)) {
-					continue;       /* try another */
+				ugh = "no alg";
+
+				if (c->alg_info_esp != NULL) {
+					ugh = check_kernel_encrypt_alg(
+						esp_attrs.transattrs.encrypt,
+						esp_attrs.transattrs.enckeylen);
 				}
 
-				/*
-				 * XXX: this is testing for AH, is
-				 * conbining even supported?  If not,
-				 * the test should be pushed into
-				 * ikev1_verify_esp().
-				 */
-				if (esp_attrs.transattrs.ta_integ == &ike_alg_integ_none) {
-					if (!encrypt_desc_is_aead(esp_attrs.transattrs.ta_encrypt) &&
-					    !ah_seen) {
-						LSWDBGP(DBG_PARSING, buf) {
-							lswlogs(buf, "ESP from ");
-							lswlog_ip(buf, &c->spd.that.host_addr);
-							lswlogs(buf, " must either have AUTH or be combined with AH");
-						};
+				if (ugh != NULL) {
+					switch (esp_attrs.transattrs.encrypt) {
+					case ESP_AES:
+					case ESP_CAMELLIA:
+					case ESP_CAMELLIAv1:
+					case ESP_3DES:
+						break;
+					case ESP_NULL:
+						if (esp_attrs.transattrs.integ_hash ==
+						    AUTH_ALGORITHM_NONE) {
+							loglog(RC_LOG_SERIOUS,
+							       "ESP_NULL requires auth algorithm");
+							return BAD_PROPOSAL_SYNTAX;
+						}
+
+						if (st->st_policy &
+						    POLICY_ENCRYPT) {
+							DBG(DBG_CONTROL | DBG_CRYPT, {
+								ipstr_buf b;
+								DBG_log("ESP_NULL Transform Proposal from %s does not satisfy POLICY_ENCRYPT",
+									ipstr(&c->spd.that.host_addr, &b));
+							});
+							continue; /* try another */
+						}
+						break;
+
+					case ESP_DES: /* NOT safe */
+						loglog(RC_LOG_SERIOUS,
+						       "1DES was proposed, it is insecure and was rejected");
+						/* FALL THROUGH */
+					default:
+						{
+						ipstr_buf b;
+
+						loglog(RC_LOG_SERIOUS,
+						       "kernel algorithm does not like: %s",
+						       ugh);
+						loglog(RC_LOG_SERIOUS,
+						       "unsupported ESP Transform %s from %s",
+						       enum_show(&esp_transformid_names,
+								 esp_attrs.transattrs.encrypt),
+						       ipstr(&c->spd.that.host_addr, &b));
 						continue; /* try another */
+						}
+					}
+				}
+
+				if (!kernel_alg_esp_auth_ok(
+						esp_attrs.transattrs.integ_hash,
+						c->alg_info_esp)) {
+					switch (esp_attrs.transattrs.integ_hash)
+					{
+					case AUTH_ALGORITHM_NONE:
+						if (!ah_seen) {
+							DBG(DBG_CONTROL, {
+								ipstr_buf b;
+								DBG_log("ESP from %s must either have AUTH or be combined with AH",
+								    ipstr(&c->spd.that.host_addr, &b));
+							});
+							continue; /* try another */
+						}
+						break;
+
+					/* ??? why do we accept these when kernel_alg_esp_auth_ok says not to? */
+					case AUTH_ALGORITHM_HMAC_MD5:
+					case AUTH_ALGORITHM_HMAC_SHA1:
+					case AUTH_ALGORITHM_HMAC_SHA2_256:
+					case AUTH_ALGORITHM_HMAC_SHA2_384:
+					case AUTH_ALGORITHM_HMAC_SHA2_512:
+					case AUTH_ALGORITHM_HMAC_RIPEMD:
+					case AUTH_ALGORITHM_AES_XCBC:
+						break;
+
+					default:
+						{
+						ipstr_buf b;
+
+						DBG(DBG_CONTROL, DBG_log(
+						       "unsupported ESP auth alg %s from %s",
+						       enum_show(&auth_alg_names,
+								 esp_attrs.transattrs.integ_hash),
+						       ipstr(&c->spd.that.host_addr,
+								&b)));
+						continue; /* try another */
+						}
 					}
 				}
 
@@ -2687,6 +2562,13 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 			if (tn == esp_proposal.isap_notrans)
 				continue; /* we didn't find a nice one */
 
+			/* check for allowed transforms in alg_info_esp */
+			if (c->alg_info_esp != NULL &&
+			    !ikev1_verify_esp(esp_attrs.transattrs.encrypt,
+						     esp_attrs.transattrs.enckeylen,
+						     esp_attrs.transattrs.integ_hash,
+						     c->alg_info_esp))
+				continue;
 			esp_attrs.spi = esp_spi;
 			inner_proto = IPPROTO_ESP;
 			if (esp_attrs.encapsulation ==
@@ -2724,7 +2606,7 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 					"compression proposed by %s, but policy for \"%s\"%s forbids it",
 					ipstr(&c->spd.that.host_addr, &b),
 					c->name, fmt_conn_instance(c, cib));
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 			}
 
 			if (!can_do_IPcomp) {
@@ -2733,13 +2615,13 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				libreswan_log(
 					"compression proposed by %s, but kernel has no IPCOMP support",
 					ipstr(&c->spd.that.host_addr, &b));
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 			}
 
 			if (well_known_cpi != 0 && !ah_seen && !esp_seen) {
 				libreswan_log(
 					"illegal proposal: bare IPCOMP used with well-known CPI");
-				return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+				return BAD_PROPOSAL_SYNTAX;
 			}
 
 			for (tn = 0; tn != ipcomp_proposal.isap_notrans;
@@ -2755,27 +2637,30 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 				       tn == ipcomp_proposal.isap_notrans - 1,
 				       PROTO_IPCOMP,
 				       st))
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 
 				previous_transnum = ipcomp_trans.isat_transnum;
 
 				if (well_known_cpi != 0 &&
-				    ipcomp_attrs.transattrs.ta_comp != well_known_cpi) {
+				    ipcomp_attrs.transattrs.encrypt !=
+				      well_known_cpi) {
 					libreswan_log(
 						"illegal proposal: IPCOMP well-known CPI disagrees with transform");
-					return BAD_PROPOSAL_SYNTAX;	/* reject whole SA */
+					return BAD_PROPOSAL_SYNTAX;
 				}
 
-				switch (ipcomp_attrs.transattrs.ta_comp) {
+				switch (ipcomp_attrs.transattrs.encrypt) {
 				case IPCOMP_DEFLATE: /* all we can handle! */
 					break;
 
 				default:
 					DBG(DBG_CONTROL | DBG_CRYPT, {
 						ipstr_buf b;
-						DBG_log("unsupported IPCOMP Transform %d from %s",
-							ipcomp_attrs.transattrs.ta_comp,
-							ipstr(&c->spd.that.host_addr, &b));
+						DBG_log("unsupported IPCOMP Transform %s from %s",
+							enum_show(&ipcomp_transformid_names,
+								  ipcomp_attrs.transattrs.encrypt),
+							ipstr(&c->spd.that.host_addr,
+								&b));
 					});
 					continue; /* try another */
 				}
@@ -2811,8 +2696,9 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 			/* emit what we've accepted */
 
 			/* Situation */
-			passert(out_struct(&ipsecdoisit, &ipsec_sit_desc,
-					   r_sa_pbs, NULL));
+			if (!out_struct(&ipsecdoisit, &ipsec_sit_desc,
+					r_sa_pbs, NULL))
+				impossible();
 
 			/* AH proposal */
 			if (ah_seen) {
@@ -2882,9 +2768,9 @@ notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,           /* body of input
 			st->st_ipcomp.peer_lastused = mononow();
 		}
 
-		return NOTHING_WRONG;	/* accept this transform! */
+		return NOTHING_WRONG;
 	}
 
 	loglog(RC_LOG_SERIOUS, "no acceptable Proposal in IPsec SA");
-	return NO_PROPOSAL_CHOSEN;	/* reject whole SA */
+	return NO_PROPOSAL_CHOSEN;
 }

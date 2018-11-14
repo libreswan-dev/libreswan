@@ -3,12 +3,11 @@
  * Header: "lswalloc.h"
  *
  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
- * Copyright (C) 2017 Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -33,6 +32,8 @@
 #include "lswalloc.h"
 
 bool leak_detective = FALSE;	/* must not change after first alloc! */
+
+const chunk_t empty_chunk = { NULL, 0 };
 
 static exit_log_func_t exit_log_func = NULL;	/* allow for customer to customize */
 
@@ -96,8 +97,8 @@ static void *alloc_bytes_raw(size_t size, const char *name)
 
 	if (p == NULL) {
 		if (exit_log_func != NULL) {
-			(*exit_log_func)("unable to malloc %zu bytes for %s",
-					size, name);
+			(*exit_log_func)("unable to malloc %lu bytes for %s",
+					(unsigned long) size, name);
 		}
 		abort();
 	}
@@ -127,15 +128,8 @@ void pfree(void *ptr)
 		union mhdr *p;
 
 		passert(ptr != NULL);
-
 		p = ((union mhdr *)ptr) - 1;
-
-		if (p->i.magic == ~LEAK_MAGIC) {
-			PASSERT_FAIL("pointer %p invalid, possible double free (magic == ~LEAK_MAGIC)", ptr);
-		} else if (p->i.magic != LEAK_MAGIC) {
-			PASSERT_FAIL("pointer %p invalid, possible heap corruption or bad pointer (magic != LEAK_MAGIC or ~LEAK_MAGIC})", ptr);
-		}
-
+		passert(p->i.magic == LEAK_MAGIC);
 		{
 			pthread_mutex_lock(&leak_detective_mutex);
 			if (p->i.older != NULL) {

@@ -1,3 +1,3 @@
 /testing/guestbin/swan-prep --userland strongswan --x509
-../../pluto/bin/strongswan-start.sh
+strongswan starter --debug-all
 echo "initdone"

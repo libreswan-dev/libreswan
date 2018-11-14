@@ -5,13 +5,11 @@
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2013-2014 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2017 Andrew Cagney
- * Copyright (C) 2017 Antony Antony <antony@phenome.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -36,66 +34,92 @@
 #include "sysdep.h"
 #include "constants.h"
 #include "lswlog.h"
+#include "libswan.h"
 
 #include "defs.h"
+#include "cookie.h"
 #include "id.h"
 #include "x509.h"
 #include "certs.h"
 #include "connections.h"        /* needs id.h */
 #include "state.h"
 #include "packet.h"
-#include "crypto.h"
+#include "md5.h"
+#include "sha1.h"
+#include "crypto.h" /* requires sha1.h and md5.h */
 #include "demux.h"
-#include "pluto_crypt.h"  /* for pluto_crypto_req & pluto_crypto_req_cont */
 #include "ikev2.h"
 #include "ikev2_prf.h"
 #include "ike_alg.h"
 #include "alg_info.h"
 #include "kernel_alg.h"
 #include "crypt_symkey.h"
+#include "crypt_dbg.h"
 #include "ikev2_prf.h"
 #include "kernel.h"
 
-void ikev2_derive_child_keys(struct child_sa *child)
+void ikev2_derive_child_keys(struct state *st, enum original_role role)
 {
-	struct state *st = &child->sa;
 	chunk_t ikeymat, rkeymat;
 	/* ??? note assumption that AH and ESP cannot be combined */
 	struct ipsec_proto_info *ipi =
 		st->st_esp.present? &st->st_esp :
 		st->st_ah.present? &st->st_ah :
 		NULL;
+	struct esp_info *ei;
 
 	passert(ipi != NULL);	/* ESP or AH must be present */
 	passert(st->st_esp.present != st->st_ah.present);	/* only one */
 
-	/*
-	 * Integrity seed (key).  AEAD, for instance has NULL (no)
-	 * separate integrity.
+	/* ??? there is no kernel_alg_ah_info */
+	/* ??? will this work if the result of kernel_alg_esp_info
+	 * is a pointer into its own static buffer (therefore ephemeral)?
 	 */
-	const struct integ_desc *integ = ipi->attrs.transattrs.ta_integ;
-	size_t integ_key_size = (integ != NULL ? integ->integ_keymat_size : 0);
-	/*
-	 * If there is encryption, then ENCKEYLEN contains the
-	 * required number of bits.
-	 */
-	size_t encrypt_key_size = BYTES_FOR_BITS(ipi->attrs.transattrs.enckeylen);
-	/*
-	 * Finally, some encryption algorithms such as AEAD and CTR
-	 * require "salt" as part of the "starting variable".
-	 */
-	const struct encrypt_desc *encrypt = ipi->attrs.transattrs.ta_encrypt;
-	size_t encrypt_salt_size = (encrypt != NULL ? encrypt->salt_size : 0);
+	ei = kernel_alg_esp_info(
+		ipi->attrs.transattrs.encrypt,
+		ipi->attrs.transattrs.enckeylen,
+		ipi->attrs.transattrs.integ_hash);
 
-	ipi->keymat_len = integ_key_size + encrypt_key_size + encrypt_salt_size;
+	passert(ei != NULL);
+	ipi->attrs.transattrs.ei = ei;
+
+	/* ipi->attrs.transattrs.integ_hasher->hash_key_size / BITS_PER_BYTE; */
+	unsigned authkeylen = ikev1_auth_kernel_attrs(ei->auth, NULL);
+	/* ??? no account is taken of AH */
+	/* transid is same as esp_ealg_id */
+	switch (ei->transid) {
+	case IKEv2_ENCR_reserved:
+		/* AH */
+		ipi->keymat_len = authkeylen;
+		break;
+
+	case IKEv2_ENCR_AES_CTR:
+		ipi->keymat_len = ei->enckeylen + authkeylen + AES_CTR_SALT_BYTES;;
+		break;
+
+	case IKEv2_ENCR_AES_GCM_8:
+	case IKEv2_ENCR_AES_GCM_12:
+	case IKEv2_ENCR_AES_GCM_16:
+		/* aes_gcm does not use an integ (auth) algo - see RFC 4106 */
+		ipi->keymat_len = ei->enckeylen + AES_GCM_SALT_BYTES;
+		break;
+
+	case IKEv2_ENCR_AES_CCM_8:
+	case IKEv2_ENCR_AES_CCM_12:
+	case IKEv2_ENCR_AES_CCM_16:
+		/* aes_ccm does not use an integ (auth) algo - see RFC 4309 */
+		ipi->keymat_len = ei->enckeylen + AES_CCM_SALT_BYTES;
+		break;
+
+	default:
+		/* ordinary ESP */
+		ipi->keymat_len = ei->enckeylen + authkeylen;
+		break;
+	}
 
 	DBG(DBG_CONTROL,
-	    DBG_log("integ=%s: .key_size=%zu encrypt=%s: .key_size=%zu .salt_size=%zu keymat_len=%" PRIu16,
-		    integ != NULL ? integ->common.name : "N/A",
-		    integ_key_size,
-		    encrypt != NULL ? encrypt->common.name : "N/A",
-		    encrypt_key_size, encrypt_salt_size,
-		    ipi->keymat_len));
+		DBG_log("enckeylen=%" PRIu32 ", authkeylen=%u, keymat_len=%" PRIu16,
+			ei->enckeylen, authkeylen, ipi->keymat_len));
 
 	/*
 	 *
@@ -116,63 +140,40 @@ void ikev2_derive_child_keys(struct child_sa *child)
 	 *    For AES GCM (RFC 4106 Section 8,1) we need to add 4 bytes for
 	 *    salt (AES_GCM_SALT_BYTES)
 	 */
-	PK11SymKey *shared = NULL;
-	if (st->st_pfs_group != NULL) {
-		DBG(DBG_CRYPT, DBG_log("#%lu %s add g^ir to child key %p",
-					st->st_serialno,
-					st->st_state_name,
-					st->st_shared_nss));
-		shared = st->st_shared_nss;
-	}
+	chunk_t ni;
+	chunk_t nr;
+	setchunk(ni, st->st_ni.ptr, st->st_ni.len);
+	setchunk(nr, st->st_nr.ptr, st->st_nr.len);
 
-	PK11SymKey *keymat = ikev2_child_sa_keymat(st->st_oakley.ta_prf,
+	PK11SymKey *keymat = ikev2_child_sa_keymat(st->st_oakley.prf_hasher,
 						   st->st_skey_d_nss,
-						   shared,
-						   st->st_ni,
-						   st->st_nr,
+						   NULL/*dh*/, ni, nr,
 						   ipi->keymat_len * 2);
 	PK11SymKey *ikey = key_from_symkey_bytes(keymat, 0, ipi->keymat_len);
-	ikeymat = chunk_from_symkey("initiator to responder keys", ikey);
-	release_symkey(__func__, "ikey", &ikey);
+	ikeymat = chunk_from_symkey("initiator keys", ikey);
+	free_any_symkey("ikey:", &ikey);
 
 	PK11SymKey *rkey = key_from_symkey_bytes(keymat, ipi->keymat_len,
 						 ipi->keymat_len);
-	rkeymat = chunk_from_symkey("responder to initiator keys:", rkey);
-	release_symkey(__func__, "rkey", &rkey);
+	rkeymat = chunk_from_symkey("responder keys:", rkey);
+	free_any_symkey("rkey:", &rkey);
 
-	release_symkey(__func__, "keymat", &keymat);
+	free_any_symkey("keymat", &keymat);
 
-	if (child->sa.st_sa_role == 0) {
-		PEXPECT_LOG("unset child sa in state #%lu",
-			    child->sa.st_serialno);
-		child->sa.st_sa_role = (ike_sa(&child->sa)->sa.st_original_role == ORIGINAL_INITIATOR)
-			? SA_INITIATOR : SA_RESPONDER;
-	}
-
-	/*
-	 * The initiator stores outgoing initiator-to-responder keymat
-	 * in PEER, and incomming responder-to-initiator keymat in
-	 * OUR.
-	 */
-	switch (child->sa.st_sa_role) {
-	case SA_RESPONDER:
+	if (role != ORIGINAL_INITIATOR) {
 		DBG(DBG_PRIVATE, {
 			    DBG_dump_chunk("our  keymat", ikeymat);
 			    DBG_dump_chunk("peer keymat", rkeymat);
 		    });
 		ipi->our_keymat = ikeymat.ptr;
 		ipi->peer_keymat = rkeymat.ptr;
-		break;
-	case SA_INITIATOR:
+	} else {
 		DBG(DBG_PRIVATE, {
 			    DBG_dump_chunk("our  keymat", rkeymat);
 			    DBG_dump_chunk("peer keymat", ikeymat);
 		    });
 		ipi->peer_keymat = ikeymat.ptr;
 		ipi->our_keymat = rkeymat.ptr;
-		break;
-	default:
-		bad_case(child->sa.st_sa_role);
 	}
 
 }

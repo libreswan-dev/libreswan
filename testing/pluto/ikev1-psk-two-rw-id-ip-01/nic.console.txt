@@ -1,9 +1,0 @@
-#!/bin/sh
-nic #
- iptables -t nat -F
-nic #
- iptables -F
-nic #
- echo done.
-done.
-

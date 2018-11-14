@@ -6,19 +6,18 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Library General Public
  * License for more details.
  */
+#include "internal.h"
+#include "libreswan.h"
+#include "constants.h"
 
-#include "ip_address.h"
-#include "ip_said.h"
-#include "ip_subnet.h"
-
-static bool samenbits(const ip_address *a, const ip_address *b, int n);
+static int samenbits(const ip_address *a, const ip_address *b, int n);
 
 /*
  * addrcmp - compare two addresses
@@ -36,10 +35,10 @@ const ip_address *b;
 	if (at != bt) {
 		return (at < bt) ? -1 : 1;
 	} else {
-		const unsigned char *ap;
-		const unsigned char *bp;
-		size_t as = addrbytesptr_read(a, &ap);
-		size_t bs = addrbytesptr_read(b, &bp);
+		unsigned char *ap;
+		unsigned char *bp;
+		size_t as = addrbytesptr(a, &ap);
+		size_t bs = addrbytesptr(b, &bp);
 
 		size_t n = (as < bs) ? as : bs;	/* min(as, bs) */
 
@@ -172,19 +171,19 @@ const ip_address * a;
 const ip_address *b;
 int nbits;
 {
-	const unsigned char *ap;
-	const unsigned char *bp;
+	unsigned char *ap;
+	unsigned char *bp;
 	size_t n;
 	int m;
 
 	if (addrtypeof(a) != addrtypeof(b))
 		return 0;	/* arbitrary */
 
-	n = addrbytesptr_read(a, &ap);
+	n = addrbytesptr(a, &ap);
 	if (n == 0)
 		return 0;	/* arbitrary */
 
-	(void) addrbytesptr_read(b, &bp);
+	(void) addrbytesptr(b, &bp);
 	if (nbits > (int)n * 8)
 		return 0;	/* "can't happen" */
 

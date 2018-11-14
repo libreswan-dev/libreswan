@@ -18,8 +18,7 @@
 <refname>ipsec addrtypeof</refname>
 <refname>ipsec addrlenof</refname>
 <refname>ipsec addrbytesof</refname>
-<refname>ipsec addrbytesptr_read</refname>
-<refname>ipsec addrbytesptr_write</refname>
+<refname>ipsec addrbytesptr</refname>
 <refpurpose>initialize an ip_address, get address type of an ip_address, get length of address within an ip_address, get copy of address within an ip_address, get pointer to address within an ip_address</refpurpose>
 </refnamediv>
 <!-- body begins here -->
@@ -55,15 +54,9 @@
 </funcprototype>
 
 <funcprototype>
-<funcdef>size_t <function>addrbytesptr_read</function></funcdef>
+<funcdef>size_t <function>addrbytesptr</function></funcdef>
     <paramdef>const ip_address * <parameter>src</parameter></paramdef>
     <paramdef>const unsigned char ** <parameter>dst</parameter></paramdef>
-</funcprototype>
-
-<funcprototype>
-<funcdef>size_t <function>addrbytesptr_write</function></funcdef>
-    <paramdef>ip_address * <parameter>src</parameter></paramdef>
-    <paramdef>unsigned char ** <parameter>dst</parameter></paramdef>
 </funcprototype>
 </funcsynopsis>
 </refsynopsisdiv>
@@ -77,7 +70,7 @@ library uses an internal type
 to contain one of the (currently two) types of IP address.
 These functions provide basic tools for creating and examining this type.</para>
 
-<para><emphasis remap='I'>initaddr</emphasis>
+<para><emphasis remap='I'>Initaddr</emphasis>
 initializes a variable
 <emphasis remap='I'>*dst</emphasis>
 of type
@@ -96,7 +89,7 @@ or
 <emphasis remap='B'>AF_INET6</emphasis>).
 The length must be consistent with the address family.</para>
 
-<para><emphasis remap='I'>addrtypeof</emphasis>
+<para><emphasis remap='I'>Addrtypeof</emphasis>
 returns the address type of an address,
 normally
 <emphasis remap='B'>AF_INET</emphasis>
@@ -107,12 +100,12 @@ or
 header file arranges to include the necessary headers for these
 names to be known.)</para>
 
-<para><emphasis remap='I'>addrlenof</emphasis>
+<para><emphasis remap='I'>Addrlenof</emphasis>
 returns the size (in bytes) of the address within an
 <emphasis remap='I'>ip_address</emphasis>,
 to permit storage allocation etc.</para>
 
-<para><emphasis remap='I'>addrbytesof</emphasis>
+<para><emphasis remap='I'>Addrbytesof</emphasis>
 copies the address within the
 <emphasis remap='I'>ip_address</emphasis>
 <varname role='parameter'>src</varname>
@@ -127,8 +120,8 @@ the returned length is still the full length.
 It is the caller's responsibility to check the
 returned value to ensure that there was enough room.</para>
 
-<para><emphasis remap='I'>addrbytesptr_read</emphasis> and <emphasis remap='I'>addrbytesptr_write</emphasis> and
-set
+<para><emphasis remap='I'>Addrbytesptr</emphasis>
+sets
 <emphasis remap='I'>*dst</emphasis>
 to a pointer to the internal address within the
 <emphasis remap='I'>ip_address</emphasis>,
@@ -138,9 +131,11 @@ If
 is
 <emphasis remap='B'>NULL</emphasis>,
 it just returns the address length.
-</para>
+The pointer points to
+<emphasis remap='B'>const</emphasis>
+to discourage misuse.</para>
 
-<para><emphasis remap='I'>initaddr</emphasis>
+<para><emphasis remap='I'>Initaddr</emphasis>
 returns
 <emphasis remap='B'>NULL</emphasis>
 for success and
@@ -171,7 +166,7 @@ An address-size mismatch is a fatal error for
 </refsect1>
 
 <refsect1 id='bugs'><title>BUGS</title>
-<para><emphasis remap='I'>addrtypeof</emphasis>
+<para><emphasis remap='I'>Addrtypeof</emphasis>
 should probably have been named
 <emphasis remap='I'>addrfamilyof</emphasis>.</para>
 </refsect1>

@@ -7,7 +7,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -76,11 +76,8 @@ def main():
                         help="run shell command non-interactively; WARNING#1: this simply concatenates remaining arguments with spaces; WARNING#2: this does not try to escape arguments before passing them onto the domain's shell")
 
     logutil.add_arguments(parser)
-
-    # These three calls go together
     args = parser.parse_args()
-    logutil.config(args, sys.stderr)
-    logger = logutil.getLogger("kvmsh")
+    logutil.config(args)
 
     # Get things started
     domain = virsh.Domain(domain_name=args.domain, host_name=args.host_name)
@@ -108,7 +105,7 @@ def main():
         if args.chdir and os.path.isabs(args.chdir):
             chdir = args.chdir
         elif args.chdir:
-            chdir = remote.path(domain, console, path=args.chdir)
+            chdir = remote.directory(domain, console, directory=os.path.realpath(args.chdir))
         else:
             chdir = None
         if chdir:
@@ -128,10 +125,10 @@ def main():
             print()
             output = console.output(None)
             if output:
-                logger.info("info: option --output disabled as it makes pexpect crash when in interactive mode.")
+                print("info: disabled --output as it makes pexpect crash when in interactive mode.")
             if args.debug:
-                logger.info("info: pexpect ignores --debug in interactive mode!")
-            logger.info("Escape character is ^]")
+                print("info: pexpect ignores --debug in interactive mode!")
+            print("Escape character is ^]")
             # Hack so that the prompt appears
             console.output(sys.stdout)
             console.run("")

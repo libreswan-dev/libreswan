@@ -12,7 +12,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -26,7 +26,9 @@
 
 #include "constants.h"
 #include "defs.h"
-#include "crypto.h"
+#include "md5.h"
+#include "sha1.h"
+#include "crypto.h" /* requires sha1.h and md5.h */
 #include "alg_info.h"
 #include "ike_alg.h"
 
@@ -47,7 +49,7 @@
  */
 
 void hmac_init(struct hmac_ctx *ctx,
-	       const struct prf_desc *prf_desc,
+	       const struct hash_desc *h,
 	       /*const*/ PK11SymKey *symkey)	/* NSS doesn't like const! */
 {
 	/*
@@ -55,10 +57,10 @@ void hmac_init(struct hmac_ctx *ctx,
 	 * generate secure keying material from nothing.
 	 * crypt_prf_init_symkey() establishes the actual key.
 	 */
-	ctx->prf = crypt_prf_init_symkey("hmac", DBG_CRYPT,
-					 prf_desc,
-					 "symkey", symkey);
-	ctx->hmac_digest_len = prf_desc->prf_output_size;
+	ctx->prf = crypt_prf_init("hmac", h, symkey);
+	ctx->hmac_digest_len = h->hash_digest_len;
+	crypt_prf_init_symkey("symkey", ctx->prf, symkey);
+	crypt_prf_update(ctx->prf);
 }
 
 void hmac_update(struct hmac_ctx *ctx,
@@ -69,5 +71,37 @@ void hmac_update(struct hmac_ctx *ctx,
 
 void hmac_final(u_char *output, struct hmac_ctx *ctx)
 {
-	crypt_prf_final_bytes(&ctx->prf, output, ctx->hmac_digest_len);
+	crypt_prf_final_bytes(ctx->prf, output, ctx->hmac_digest_len);
+}
+
+/*
+ * XXX: This should be moved to crypt_symkey.c and made private.
+ */
+
+CK_MECHANISM_TYPE nss_key_derivation_mech(const struct hash_desc *hasher)
+{
+	CK_MECHANISM_TYPE mechanism = 0x80000000;
+
+	switch (hasher->common.algo_id) {
+	case OAKLEY_MD5:
+		mechanism = CKM_MD5_KEY_DERIVATION;
+		break;
+	case OAKLEY_SHA1:
+		mechanism = CKM_SHA1_KEY_DERIVATION;
+		break;
+	case OAKLEY_SHA2_256:
+		mechanism = CKM_SHA256_KEY_DERIVATION;
+		break;
+	case OAKLEY_SHA2_384:
+		mechanism = CKM_SHA384_KEY_DERIVATION;
+		break;
+	case OAKLEY_SHA2_512:
+		mechanism = CKM_SHA512_KEY_DERIVATION;
+		break;
+	default:
+		DBG(DBG_CRYPT,
+		    DBG_log("NSS: key derivation mechanism not supported"));
+		break;
+	}
+	return mechanism;
 }

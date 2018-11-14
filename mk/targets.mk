@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -38,25 +38,25 @@ all:
 programs: all
 man: manpages
 
-#
 # Generate a recursive target.
-#
 
 define recursive-target
-
   .PHONY: $(1) local-$(1) recursive-$(1)
-  $(1) local-$(1) recursive-$(1):
+  $(1): local-$(1) recursive-$(1)
+  local-$(1):
 
-  # Force recursion before running the local target.  While this is
-  # what make systems like autoconf do, pluto was for a very long time
-  # doing the opposite - doing the recursion last.
+  # Building $(SUBDIRS) after all local targets is historic behaviour
+  recursive-$(1): local-$(1)
 
-  $(1): recursive-$(1)
-	@$$(MAKE) --no-print-directory local-$(1)
+  # Require $(builddir)/Makefile.  Targets that switch to builddir
+  # require it.  In $(topsrcdir) this will trigger a re-build of the
+  # Makefiles, in sub-directories this will simply barf.  It's assumed
+  # that $(OBJDIR) has been created by the time a subdir build has
+  # run.
+  $(1) local-$(1) recursive-$(1): $$(builddir)/Makefile
 
   recursive-$(1):
 	@set -eu $$(foreach subdir,$$(SUBDIRS),; $$(MAKE) -C $$(subdir) $$(patsubst recursive-%,%,$$@))
-
 endef
 
 # The build is split into several sub-targets - namely so that
@@ -89,8 +89,6 @@ $(eval $(call recursive-target,install))
 local-install: $(patsubst %,local-install-%,$(TARGETS))
 
 $(eval $(call recursive-target,check))
-
-$(eval $(call recursive-target,selfcheck))
 
 # The install_file_list target is special; the command:
 #

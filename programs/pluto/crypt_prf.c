@@ -12,12 +12,12 @@
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2015 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2015,2017 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2015 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -33,166 +33,187 @@
 #include "ike_alg.h"
 #include "crypt_prf.h"
 #include "crypt_symkey.h"
+#include "crypt_dbg.h"
 #include "crypto.h"
 
-size_t crypt_prf_fips_key_size_min(const struct prf_desc *prf)
-{
-	/*
-	 * FIPS 198 Section 3 CRYPTOGRAPHIC KEYS requires keys to be
-	 * >= "L/2" (where L is the block-size in bytes of the hash
-	 * function).
-	 *
-	 * FIPS 198-1 Section 3 instead cites SP 800-107 which dictates
-	 * requirements in Section 5.4.3
-	 */
-	return prf->prf_key_size / 2;
-}
-
-size_t crypt_prf_fips_key_size_floor(void)
-{
-	static size_t key_size_floor;
-	if (!key_size_floor) {
-		key_size_floor = SIZE_MAX;
-		for (const struct prf_desc **prfp = next_prf_desc(NULL);
-		     prfp != NULL; prfp = next_prf_desc(prfp)) {
-			if ((*prfp)->common.fips) {
-				key_size_floor = min(key_size_floor,
-					     crypt_prf_fips_key_size_min(*prfp));
-			}
-		}
-	}
-	return key_size_floor;
-}
-
 struct crypt_prf {
-	struct prf_context *context;
-	lset_t debug;
 	const char *name;
-	const struct prf_desc *desc;
+	const struct hash_desc *hasher;
+	/* for converting chunks to symkeys */
+	PK11SymKey *scratch;
+	/* Did we allocate KEY? */
+	bool we_own_key;
+	/* intermediate values */
+	PK11SymKey *key;
+	PK11SymKey *inner;
 };
 
-static struct crypt_prf *wrap(const struct prf_desc *prf_desc, lset_t debug,
-			      const char *name,
-			      struct prf_context *context)
+/*
+ * During the init phase, accumulate the key material in KEY.
+ */
+struct crypt_prf *crypt_prf_init(const char *name, const struct hash_desc *hasher,
+				 PK11SymKey *scratch)
 {
-	struct crypt_prf *prf = NULL;
-	if (context != NULL) {
-		prf = alloc_thing(struct crypt_prf, name);
-		*prf = (struct crypt_prf) {
-			.context = context,
-			.debug = debug,
-			.name = name,
-			.desc = prf_desc,
-		};
-	}
-	DBG(debug, DBG_log("%s PRF %s crypt-prf@%p",
-			   name, prf_desc->common.name, prf));
+	struct crypt_prf *prf = alloc_bytes(sizeof(struct crypt_prf), name);
+	DBG(DBG_CRYPT, DBG_log("%s prf: init %p", name, prf));
+	prf->name = name;
+	prf->hasher = hasher;
+	prf->scratch = scratch;
+	prf->we_own_key = FALSE;
+	prf->key = NULL;
+	prf->inner = NULL;
 	return prf;
 }
 
-struct crypt_prf *crypt_prf_init_chunk(const char *name, lset_t debug,
-				       const struct prf_desc *prf_desc,
-				       const char *chunk_name, chunk_t chunk)
+/*
+ * Update KEY marking it as ours.  Only call with a KEY we created.
+ */
+static void update_key(struct crypt_prf *prf, PK11SymKey *key)
 {
-	DBG(debug, DBG_log("%s PRF %s init %s-chunk@%p (length %zd)",
-			   name, prf_desc->common.name,
-			   chunk_name, chunk.ptr, chunk.len));
-	return wrap(prf_desc, debug, name,
-		    prf_desc->prf_ops->init_bytes(prf_desc, name,
-						  chunk_name, chunk.ptr, chunk.len));
+	if (prf->we_own_key) {
+		free_any_symkey(__func__, &prf->key);
+	}
+	prf->we_own_key = TRUE;
+	prf->key = key;
 }
 
-struct crypt_prf *crypt_prf_init_symkey(const char *name, lset_t debug,
-					const struct prf_desc *prf_desc,
-					const char *key_name, PK11SymKey *key)
+void crypt_prf_init_symkey(const char *name, struct crypt_prf *prf, PK11SymKey *key)
 {
-	DBG(debug, DBG_log("%s PRF %s init %s-key@%p (size %zd)",
-			   name, prf_desc->common.name,
-			   key_name, key, sizeof_symkey(key)));
-	return wrap(prf_desc, debug, name,
-		    prf_desc->prf_ops->init_symkey(prf_desc, name,
-						   key_name, key));
+	DBG(DBG_CRYPT, DBG_log("%s prf: init symkey %s %p (length %d)",
+			       prf->name, name, key, PK11_GetKeyLength(key)));
+	if (prf->key == NULL) {
+		prf->we_own_key = FALSE;
+		prf->key = key;
+	} else {
+		update_key(prf, concat_symkey_symkey(prf->hasher, prf->key, key));
+	}
+}
+
+void crypt_prf_init_chunk(const char *name, struct crypt_prf *prf, chunk_t key)
+{
+	DBG(DBG_CRYPT, DBG_log("%s prf: init chunk %s %p (length %zd)",
+			       prf->name, name, key.ptr, key.len));
+	if (prf->key == NULL) {
+		prf->key = symkey_from_chunk(prf->scratch, key);
+		prf->we_own_key = TRUE;
+	} else {
+		update_key(prf, concat_symkey_chunk(prf->hasher, prf->key, key));
+	}
 }
 
 /*
- * Accumulate data.
+ * Prepare for update phase (accumulate seed material).
  */
+void crypt_prf_update(struct crypt_prf *prf)
+{
+	DBG(DBG_CRYPT, DBG_log("%s prf: update", prf->name));
+	/* create the prf key from KEY.  */
+	passert(prf->key != NULL);
+
+	passert(prf->hasher->hash_block_size <= MAX_HMAC_BLOCKSIZE);
+
+	/* If the key is too big, re-hash it down to size. */
+	if (PK11_GetKeyLength(prf->key) > prf->hasher->hash_block_size) {
+		update_key(prf, hash_symkey_to_symkey("prf hash to size:",
+						      prf->hasher, prf->key));
+	}
+
+	/* If the key is too small, pad it. */
+	if (PK11_GetKeyLength(prf->key) < prf->hasher->hash_block_size) {
+		/* pad it to block_size. */
+		static /*const*/ unsigned char z[MAX_HMAC_BLOCKSIZE] = { 0 };
+		chunk_t hmac_pad_prf = { z,
+			prf->hasher->hash_block_size - PK11_GetKeyLength(prf->key) };
+
+		update_key(prf, concat_symkey_chunk(prf->hasher, prf->key,
+						    hmac_pad_prf));
+	}
+	passert(prf->key != NULL);
+
+	/* Start forming the inner hash input: (key^IPAD)|... */
+	passert(prf->inner == NULL);
+	unsigned char ip[MAX_HMAC_BLOCKSIZE];
+	memset(ip, HMAC_IPAD, prf->hasher->hash_block_size);
+	chunk_t hmac_ipad = { ip, prf->hasher->hash_block_size };
+	prf->inner = xor_symkey_chunk(prf->key, hmac_ipad);
+}
 
 void crypt_prf_update_chunk(const char *name, struct crypt_prf *prf,
 			    chunk_t update)
 {
-	DBG(prf->debug, DBG_log("%s PRF %s update %s-chunk@%p (length %zd)",
-				prf->name, prf->desc->common.name,
-				name, update.ptr, update.len));
-	prf->desc->prf_ops->digest_bytes(prf->context, name, update.ptr, update.len);
+	DBG(DBG_CRYPT, DBG_log("%s prf: update chunk %s %p (length %zd)",
+			       prf->name, name, update.ptr, update.len));
+	append_symkey_chunk(prf->hasher, &(prf->inner), update);
 }
 
 void crypt_prf_update_symkey(const char *name, struct crypt_prf *prf,
 			     PK11SymKey *update)
 {
-	DBG(prf->debug, DBG_log("%s PRF %s update %s-key@%p (size %zd)",
-				prf->name, prf->desc->common.name,
-				name, update, sizeof_symkey(update)));
-	prf->desc->prf_ops->digest_symkey(prf->context, name, update);
+	DBG(DBG_CRYPT, DBG_log("%s prf: update symkey %s %p (length %d)",
+			       prf->name, name, update,
+			       PK11_GetKeyLength(update)));
+	append_symkey_symkey(prf->hasher, &(prf->inner), update);
 }
 
 void crypt_prf_update_byte(const char *name, struct crypt_prf *prf,
 			   uint8_t update)
 {
-	DBG(prf->debug, DBG_log("%s PRF %s update %s-byte@0x%x (%u)",
-				prf->name, prf->desc->common.name,
-				name, update, update));
-	prf->desc->prf_ops->digest_bytes(prf->context, name, &update, 1);
+	DBG(DBG_CRYPT, DBG_log("%s prf: update byte %s", prf->name, name));
+	append_symkey_byte(prf->hasher, &(prf->inner), update);
 }
 
 void crypt_prf_update_bytes(const char *name, struct crypt_prf *prf,
 			    const void *update, size_t sizeof_update)
 {
-	DBG(prf->debug, DBG_log("%s PRF %s update %s-bytes@%p (length %zd)",
-				prf->name, prf->desc->common.name,
-				name, update, sizeof_update));
-	prf->desc->prf_ops->digest_bytes(prf->context, name, update, sizeof_update);
+	DBG(DBG_CRYPT, DBG_log("%s prf: update bytes %s %p (length %zd)",
+			       prf->name, name, update, sizeof_update));
+	append_symkey_bytes(prf->hasher, &(prf->inner), update, sizeof_update);
 }
 
-PK11SymKey *crypt_prf_final_symkey(struct crypt_prf **prfp)
+static PK11SymKey *compute_outer(struct crypt_prf *prf)
 {
-	struct crypt_prf *prf = *prfp;
-	DBG(prf->debug, DBG_log("%s PRF %s final-key ...",
-				prf->name, prf->desc->common.name));
-	PK11SymKey *tmp = prf->desc->prf_ops->final_symkey(&prf->context);
-	DBG(prf->debug, DBG_log("%s PRF %s final-key@%p (size %zu)",
-				(*prfp)->name, (*prfp)->desc->common.name,
-				tmp, sizeof_symkey(tmp)));
-	pfree(*prfp);
-	*prfp = prf = NULL;
-	return tmp;
+	DBG(DBG_CRYPT, DBG_log("%s prf: final", prf->name));
+
+	passert(prf->inner != NULL);
+	/* run that through hasher */
+	PK11SymKey *hashed_inner = hash_symkey_to_symkey("prf inner hash:",
+							 prf->hasher, prf->inner);
+	free_any_symkey("prf inner:", &prf->inner);
+
+	/* Input to outer hash: (key^OPAD)|hashed_inner.  */
+	passert(prf->hasher->hash_block_size <= MAX_HMAC_BLOCKSIZE);
+	unsigned char op[MAX_HMAC_BLOCKSIZE];
+	memset(op, HMAC_OPAD, prf->hasher->hash_block_size);
+	chunk_t hmac_opad = { op, prf->hasher->hash_block_size };
+	PK11SymKey *outer = xor_symkey_chunk(prf->key, hmac_opad);
+	append_symkey_symkey(prf->hasher, &outer, hashed_inner);
+	free_any_symkey("prf hashed inner:", &hashed_inner);
+	if (prf->we_own_key) {
+		free_any_symkey("prf key", &prf->key);
+	}
+
+	return outer;
 }
 
-void crypt_prf_final_bytes(struct crypt_prf **prfp,
+PK11SymKey *crypt_prf_final(struct crypt_prf *prf)
+{
+	PK11SymKey *outer = compute_outer(prf);
+	/* Finally hash that */
+	PK11SymKey *hashed_outer = hash_symkey_to_symkey("prf outer hash",
+							 prf->hasher, outer);
+	free_any_symkey("prf outer", &outer);
+	pfree(prf);
+	DBG(DBG_CRYPT, DBG_dump_symkey("prf final result", hashed_outer));
+	return hashed_outer;
+}
+
+void crypt_prf_final_bytes(struct crypt_prf *prf,
 			   void *bytes, size_t sizeof_bytes)
 {
-	struct crypt_prf *prf = *prfp;
-	DBG(prf->debug, DBG_log("%s PRF %s final-bytes ...",
-				prf->name, prf->desc->common.name));
-	prf->desc->prf_ops->final_bytes(&prf->context, bytes, sizeof_bytes);
-	DBG(prf->debug, DBG_log("%s PRF %s final-bytes@%p (length %zu)",
-				(*prfp)->name, (*prfp)->desc->common.name,
-				bytes, sizeof_bytes));
-	pfree(*prfp);
-	*prfp = prf = NULL;
-}
-
-chunk_t crypt_prf_final_chunk(struct crypt_prf **prfp)
-{
-	struct crypt_prf *prf = *prfp;
-	DBG(prf->debug, DBG_log("%s PRF %s final-chunk ...",
-				prf->name, prf->desc->common.name));
-	chunk_t chunk = alloc_chunk(prf->desc->prf_output_size, prf->name);
-	prf->desc->prf_ops->final_bytes(&prf->context, chunk.ptr, chunk.len);
-	DBG(prf->debug, DBG_log("%s PRF %s final-chunk@%p (length %zu)",
-				(*prfp)->name, (*prfp)->desc->common.name,
-				chunk.ptr, chunk.len));
-	pfree(*prfp);
-	*prfp = prf = NULL;
-	return chunk;
+	PK11SymKey *outer = compute_outer(prf);
+	/* Finally hash that */
+	hash_symkey_to_bytes("prf outer hash", prf->hasher, outer, bytes, sizeof_bytes);
+	free_any_symkey("prf outer", &outer);
+	pfree(prf);
+	DBG(DBG_CRYPT, DBG_dump("prf final bytes", bytes, sizeof_bytes));
 }

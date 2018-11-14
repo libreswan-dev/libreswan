@@ -1,5 +1,9 @@
-/testing/guestbin/swan-prep
+: ==== start ====
+TESTNAME=sourceip-01
+source /testing/pluto/bin/eastlocal.sh
+
 ipsec start
 /testing/pluto/bin/wait-until-pluto-started
-ipsec auto --add westnet-eastnet-sourceip
-echo "initdone"
+
+ipsec auto --add westnet--eastnet-sourceip
+

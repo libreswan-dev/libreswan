@@ -1,13 +1,11 @@
-/* misc. universal things, for libreswan
- *
+/* misc. universal things
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
- * Copyright (C) 2018  Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -19,9 +17,7 @@
 #ifndef _DEFS_H
 #define _DEFS_H
 
-#include "lswcdefs.h"
 #include "lswalloc.h"
-#include "realtime.h"
 
 /* type of serial number of a state object
  * Needed in connections.h and state.h; here to simplify dependencies.
@@ -30,32 +26,17 @@ typedef unsigned long so_serial_t;
 #define SOS_NOBODY      0       /* null serial number */
 #define SOS_FIRST       1       /* first normal serial number */
 
-typedef enum {
-		IKE_SA,
-		IPSEC_SA
-	} sa_t;
+extern monotime_t mononow(void);	/* monotonic variant of time(2) */
 
 /* warns a predefined interval before expiry */
 extern const char *check_expiry(realtime_t expiration_date,
 				time_t warning_interval, bool strict);
 
-/*
- * Cleanly exit Pluto
- *
- * The global EXITING_PLUTO is there as a hint to long running threads
- * that they should also shutdown (it should be tested in the thread's
- * main and some inner loops).  Just note that, on its own, it isn't
- * sufficient.  Any long running threads will also need a gentle nudge
- * (so that they loop around and detect the need to quit) and then a
- * join to confirm that they have exited.
- *
- * Also avoid pthread_cancel() which can crash.
- */
+/* cleanly exit Pluto */
 
-extern volatile bool exiting_pluto;
 extern void exit_pluto(int /*status*/) NEVER_RETURNS;
 
-typedef uint32_t msgid_t;      /* Host byte ordered */
+typedef u_int32_t msgid_t;      /* Network order for ikev1, host order for ikev2 */
 
 /* are all bytes 0? */
 extern bool all_zero(const unsigned char *m, size_t len);
@@ -74,7 +55,5 @@ extern bool all_zero(const unsigned char *m, size_t len);
 #else
 #define DISCARD_CONST(vartype, varname) ((vartype)(uintptr_t)(varname))
 #endif
-
-extern bool in_main_thread(void);	/* in plutomain.c */
 
 #endif /* _DEFS_H */

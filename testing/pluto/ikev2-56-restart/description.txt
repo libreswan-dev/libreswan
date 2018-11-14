@@ -1,2 +1,0 @@
-This test is restart test to see how simultaneous SA behave.
-So far it can only run manually.

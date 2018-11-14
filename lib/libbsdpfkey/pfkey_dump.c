@@ -82,7 +82,7 @@
 		if (sizeof((str)[0]) == 0 \
 		    || num >= sizeof(str) / sizeof((str)[0])) \
 			printf("%u ", (num)); \
-		else if ((str)[(num)][0] == '\0') \
+		else if (strlen((str)[(num)]) == 0) \
 			printf("%u ", (num)); \
 		else \
 			printf("%s ", (str)[(num)]); \
@@ -102,8 +102,8 @@
 	} while (0)
 
 static char *str_ipaddr(struct sockaddr *);
-static char *str_prefport(unsigned, unsigned, unsigned, unsigned);
-static void str_upperspec(unsigned, unsigned, unsigned);
+static char *str_prefport(u_int, u_int, u_int, u_int);
+static void str_upperspec(u_int, u_int, u_int);
 static char *str_mono_time(monotime_t);
 static char *str_time(deltime_t);
 static void str_lifetime_byte(struct sadb_lifetime *, char *);
@@ -201,7 +201,7 @@ static struct val2str str_alg_comp[] = {
 };
 
 /*
- * dump SADB_MSG formatted.  For debugging, you should use kdebug_sadb().
+ * dump SADB_MSG formated.  For debugging, you should use kdebug_sadb().
  */
 void pfkey_sadump(m)
 struct sadb_msg *m;
@@ -270,10 +270,10 @@ struct sadb_msg *m;
 	GETMSGSTR(str_mode, m_sa2->sadb_x_sa2_mode);
 
 	printf("spi=%u(0x%08x) reqid=%u(0x%08x)\n",
-	       (uint32_t)ntohl(m_sa->sadb_sa_spi),
-	       (uint32_t)ntohl(m_sa->sadb_sa_spi),
-	       (uint32_t)m_sa2->sadb_x_sa2_reqid,
-	       (uint32_t)m_sa2->sadb_x_sa2_reqid);
+	       (u_int32_t)ntohl(m_sa->sadb_sa_spi),
+	       (u_int32_t)ntohl(m_sa->sadb_sa_spi),
+	       (u_int32_t)m_sa2->sadb_x_sa2_reqid,
+	       (u_int32_t)m_sa2->sadb_x_sa2_reqid);
 
 	/* encryption key */
 	if (m->sadb_msg_satype == SADB_X_SATYPE_IPCOMP) {
@@ -369,7 +369,7 @@ struct sadb_msg *m;
 	struct sadb_x_policy *m_xpl;
 	struct sadb_lifetime *m_lftc = NULL, *m_lfth = NULL;
 	struct sockaddr *sa;
-	uint16_t sport = 0, dport = 0;
+	u_int16_t sport = 0, dport = 0;
 
 	/* check pfkey message. */
 	if (pfkey_align(m, mhp)) {
@@ -522,7 +522,7 @@ struct sockaddr *sa;
  * BEWARE: result may be in a single static buffer.
  */
 static const char *str_prefport(family, pref, port, ulp)
-unsigned family, pref, port, ulp;
+u_int family, pref, port, ulp;
 {
 	static char buf[128];
 	char prefbuf[128];
@@ -560,7 +560,7 @@ unsigned family, pref, port, ulp;
 }
 
 static void str_upperspec(ulp, p1, p2)
-unsigned ulp, p1, p2;
+u_int ulp, p1, p2;
 {
 	if (ulp == IPSEC_ULPROTO_ANY) {
 		printf("any");
