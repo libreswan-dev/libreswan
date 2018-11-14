@@ -12,7 +12,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -22,12 +22,20 @@
  */
 
 #ifndef _CONSTANTS_H_
+#define _CONSTANTS_H_
+
+#include <stddef.h> /* for size_t */
+
+#include "shunk.h"
+#include "lset.h"
+
+struct lswlog;
 
 /*
  * This file was split into internal contants (Libreswan/pluto related),
  * and external constants (defined by IETF, etc.)
  *
- * Constants which are kernel/IPsec related are in appropriate
+ * Constants that are kernel/IPsec related are in appropriate
  * libreswan / *.h files.
  *
  */
@@ -77,30 +85,23 @@
 #define PMIN(x,y) ((x) <= (y) ? (x) : (y))
 #define PMAX(x,y) ((x) >= (y) ? (x) : (y))
 
-/* Many routines return only success or failure, but wish to describe
- * the failure in a message.  We use the convention that they return
- * a NULL on success and a pointer to constant string on failure.
- * The fact that the string is a constant is limiting, but it
- * avoids storage management issues: the recipient is allowed to assume
- * that the string will live "long enough" (usually forever).
- * <libreswan.h> defines err_t for this return type.
+/*
+ * Libreswan was written before <stdbool.h> was standardized.
+ * We continue to use TRUE and FALSE because we think that they are clearer
+ * than true or false.
  */
 
-/* you'd think this should be builtin to compiler... */
+#include <stdbool.h> /* for 'bool' */
+
 #ifndef TRUE
-#  define TRUE 1
-#  ifndef LIBRESWAN_COCOA_APP
-typedef int bool;
-#  endif
+#  define TRUE true
 #endif
 
 #ifndef FALSE
-#  define FALSE 0
+#  define FALSE false
 #endif
 
 #define NULL_FD (-1)	/* NULL file descriptor */
-#define dup_any(fd)  ((fd) == NULL_FD ? NULL_FD : dup((fd)))
-#define close_any(fd)  { if ((fd) != NULL_FD) { close(fd); (fd) = NULL_FD; } }
 
 #include <inttypes.h>
 
@@ -114,12 +115,21 @@ typedef int bool;
 /* clearer shorthand for *cmp functions */
 #define streq(a, b) (strcmp((a), (b)) == 0)
 #define strneq(a, b, c) (strncmp((a), (b), (c)) == 0)
-#define startswith(a, b) strneq((a), (b), sizeof(b)-1)	/* b must be literal! */
+#define startswith(a, b) strneq((a), (b), strlen(b))
 #define eat(a, b) (startswith((a), (b))? ((a) += sizeof(b) - 1), TRUE : FALSE)
 #define strcaseeq(a, b) (strcasecmp((a), (b)) == 0)
 #define strncaseeq(a, b, n) (strncasecmp((a), (b), (n)) == 0)
 #define memeq(a, b, n) (memcmp((a), (b), (n)) == 0)
 
+/*
+ * Fill a string field, ensuring that it is padded and terminated with NUL
+ * If termination isn't required, strncpy would do.
+ * If filling isn't required, jam_str would do.
+ */
+#define fill_and_terminate(dest, src, len) { \
+		strncpy((dest), (src), (len)-1); \
+		(dest)[(len)-1] = '\0'; \
+	}
 
 /*
  * zero an object given a pointer to it.
@@ -151,7 +161,7 @@ typedef int bool;
  *
  * Like zero macro, but sets object to likely wrong value.
  * The intent is that memory that is supposed to not be used
- * without futher initialization will not accidentally have a
+ * without further initialization will not accidentally have a
  * plausible value (eg. zero, or the previous value, or some
  * secret that might be leaked).
  */
@@ -159,27 +169,11 @@ typedef int bool;
 #define messupn(x, n) memset((x), 0xFB, (n))	/* set n bytes to wrong value */
 #define messup(x) messupn((x), sizeof(*(x)))	/* set all bytes to wrong value */
 
+extern const char *bool_str(bool b);	/* bool -> string */
+
 /* routines to copy C strings to fixed-length buffers */
 extern char *jam_str(char *dest, size_t size, const char *src);
 extern char *add_str(char *buf, size_t size, char *hint, const char *src);
-
-/* set type with room for at least 64 elements for ALG opts
- * (was 32 in stock FS)
- */
-
-typedef uint_fast64_t lset_t;
-#define PRIxLSET    PRIxFAST64
-#define LELEM_ROOF  64	/* all elements must be less than this */
-#define LEMPTY ((lset_t)0)
-#define LELEM(opt) ((lset_t)1 << (opt))
-#define LRANGE(lwb, upb) LRANGES(LELEM(lwb), LELEM(upb))
-#define LRANGES(first, last) (last - first + last)
-#define LHAS(set, elem)  (((set) & LELEM(elem)) != LEMPTY)
-#define LIN(subset, set)  (((subset) & (set)) == (subset))
-#define LDISJOINT(a, b)  (((a) & (b)) == LEMPTY)
-/* LFIRST: find first element of a set (tricky use of twos complement) */
-#define LFIRST(s) ((s) & -(s))
-#define LSINGLETON(s) ((s) != LEMPTY && LFIRST(s) == (s))
 
 /* Routines to check and display values.
  *
@@ -201,31 +195,62 @@ typedef uint_fast64_t lset_t;
  *    for any unnamed value (in a static area -- NOT RE-ENTRANT)
  * enum_showb() is like enum_show() but uses a caller-supplied buffer
  *    for any unnamed value and thus is re-entrant.
- */
-
-/* Printing lset_t values:
  *
- * bitnamesof() formats a display of a set of named bits (in a static area -- NOT RE-ENTRANT)
- * bitnamesofb() formats into a caller-supplied buffer (re-entrant)
+ * lswlog_enum() appends the name of an enum value; if unnamed, append
+ * a mashup of the standard prefix and the numeric value.
+ *
+ * lswlog_enum_short() appends the name of an enum value with any
+ * standard prefix removed; if unnamed, append a mashup of the
+ * standard prefix and the numeric value.
  */
 
 typedef const struct enum_names enum_names;
 
 extern const char *enum_name(enum_names *ed, unsigned long val);
+extern const char *enum_short_name(enum_names *ed, unsigned long val);
+
+size_t lswlog_enum(struct lswlog *, enum_names *en, unsigned long val);
+size_t lswlog_enum_short(struct lswlog *, enum_names *en, unsigned long val);
 
 /* caller-allocated buffer for enum_showb */
 struct esb_buf {
-	/* enough space for any unsigned 32-bit + "??" */
-	char buf[14];
+	/* enough space for decimal rep of any unsigned long + "??"
+	 * sizeof yields log-base-256 of maximum value.
+	 * Multiplying by 241/100 converts this to the number of decimal digits
+	 * (the common log), rounded up a little (instead of 2.40654...).
+	 * The addition of 99 ensures that the division rounds up to an integer
+	 * rather than truncates.
+	 */
+	char buf[(sizeof(unsigned long) * 241 + 99) / 100 + sizeof("??")];
 };
 extern const char *enum_showb(enum_names *ed, unsigned long val, struct esb_buf *);
+extern const char *enum_show_shortb(enum_names *ed, unsigned long val, struct esb_buf *);
 
 extern const char *enum_show(enum_names *ed, unsigned long val);	/* NOT RE-ENTRANT */
+
+/*
+ * iterator
+ *
+ * start with -1 -- we hope more immune to rounding
+ * ??? how are integers subject to rounding?
+ */
+extern long next_enum(enum_names *en, long last);
 
 /* sometimes the prefix gets annoying */
 extern const char *strip_prefix(const char *s, const char *prefix);
 
 extern int enum_search(enum_names *ed, const char *string);
+
+/*
+ * Search ED for an enum matching STRING.  Return -1 if no match is
+ * found.
+ *
+ * Unlike enum_search() this compares strings both with and without
+ * any prefix or suffix.  For instance, given the enum_name entry
+ * "ESP_BLOWFISH(OBSOLETE)" with prefix "ESP_", any of
+ * "esp_blowfish(obsolete)", "esp_blowfish" and "blowfish" will match.
+ */
+extern int enum_match(enum_names *ed, shunk_t string);
 
 /*
  * Printing enum enums.
@@ -238,6 +263,13 @@ extern int enum_search(enum_names *ed, const char *string);
  * enum_enum_table() returns TABLE's enum_names, or NULL.
  * enum_enum_name() returns TABLE VAL's enum, or NULL.
  * enum_enum_showb() returns TABLE VAL's enum or %ld using BUF.
+ *
+ * lswlog_enum_enum() appends TABLE VAL's enum name; if unnamed,
+ * append a mashup of the standard prefix and the numeric value.
+ *
+ * lswlog_enum_enum_short() appends TABLE VAL's enum name with any
+ * standard prefix removed; if unnamed, append a mashup of the
+ * standard prefix and the numeric value.
  */
 
 typedef const struct enum_enum_names enum_enum_names;
@@ -248,6 +280,10 @@ const char *enum_enum_name(enum_enum_names *e, unsigned long table,
 const char *enum_enum_showb(enum_enum_names *e, unsigned long table,
 			    unsigned long val, struct esb_buf *buf);
 
+size_t lswlog_enum_enum(struct lswlog *log, enum_enum_names *een,
+			unsigned long table, unsigned long val);
+size_t lswlog_enum_enum_short(struct lswlog *log, enum_enum_names *een,
+			      unsigned long table, unsigned long val);
 
 /* Printing lset_t values:
  *
@@ -257,12 +293,17 @@ const char *enum_enum_showb(enum_enum_names *e, unsigned long table,
  *
  * bitnamesof() formats a display of a set of named bits (in a static area -- NOT RE-ENTRANT)
  * bitnamesofb() formats into a caller-supplied buffer (re-entrant)
+ *
+ * lswlog_enum_lset_short() formats into a caller-supplied buffer -- only form
  */
 extern bool testset(const char *const table[], lset_t val);
 extern const char *bitnamesof(const char *const table[], lset_t val);	/* NOT RE-ENTRANT */
 extern const char *bitnamesofb(const char *const table[],
 			       lset_t val,
 			       char *buf, size_t blen);
+
+size_t lswlog_enum_lset_short(struct lswlog *, enum_names *sd,
+			      const char *separator, lset_t val);
 
 /*
  * The sparser_name should be transformed into keyword_enum_value
@@ -282,8 +323,6 @@ struct keyword_enum_values {
 	const struct keyword_enum_value *values;
 	size_t valuesize;
 };
-
-extern struct keyword_enum_values kw_host_list;
 
 extern const char *keyword_name(struct keyword_enum_values *kevs,
 				unsigned int value);
@@ -313,5 +352,4 @@ extern void init_constants(void);
 #include "pluto_constants.h"
 #include "names_constant.h"
 
-#define _CONSTANTS_H_
 #endif /* _CONSTANTS_H_ */

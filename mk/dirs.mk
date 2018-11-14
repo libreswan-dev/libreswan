@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -95,7 +95,7 @@ dirs.mk.dir := $(patsubst %/,%,$(dir $(dirs.mk.file)))
 top_srcdir := $(patsubst %/,%,$(dir $(dirs.mk.dir)))
 
 
-# Pull in sufficent stuff to get a definition of OBJDIR.  It might be
+# Pull in sufficient stuff to get a definition of OBJDIR.  It might be
 # set by local includes so pull that in first.
 include $(top_srcdir)/mk/local.mk
 include $(top_srcdir)/mk/objdir.mk
@@ -115,11 +115,14 @@ ifeq ($(dirs.mk.included.from.srcdir),true)
 # In the source tree ...
 
 srcdir := .
-ifeq ($(top_srcdir),.)
-# avoid ./OBJDIR
-top_builddir := $(OBJDIR)
+ifeq ($(patsubst /%,/,$(OBJDIR)),/)
+  # absolute
+  top_builddir := $(OBJDIR)
+else ifeq ($(top_srcdir),.)
+  # avoid ./OBJDIR
+  top_builddir := $(OBJDIR)
 else
-top_builddir := $(top_srcdir)/$(OBJDIR)
+  top_builddir := $(top_srcdir)/$(OBJDIR)
 endif
 builddir := $(top_builddir)$(call dirs.mk.down.path.from,$(top_srcdir))
 
@@ -190,11 +193,3 @@ OBJDIRTOP?=$(abs_top_builddir)
 	@echo SRCDIR=$(SRCDIR)
 	@echo OBJDIRTOP=$(OBJDIRTOP)
 	@echo LIBRESWANSRCDIR=$(LIBRESWANSRCDIR)
-
-# Targets needing the builddir should add:
-#
-#     | $(builddir)
-#
-# as a soft/order-only dependency.
-$(builddir):
-	mkdir -p $(builddir)

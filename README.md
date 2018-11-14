@@ -11,10 +11,9 @@ see README.KLIPS.
 Libreswan was forked from Openswan 2.6.38, which was forked from
 FreeS/WAN 2.04. See the CREDITS files for contributor acknowledgments.
 
-It can be downloaded from various locations:
+It can be downloaded from:
 
     https://download.libreswan.org/
-    ftp://ftp.libreswan.org/
 
 A Git repository is available at:
 
@@ -26,9 +25,9 @@ version 2; see the LICENSE and CREDIT.* files. Some smaller parts have
 a different license.
 
 ## Requirements
-A recent Linux distribution based on either kernel 2.4.x, 2.6.x or 3.x
-are the currently supported platforms. Libreswan has been ported to
-Win2k/BSD/OSX as well.
+Recent Linux distributions based on kernel 2.x, 3.x or 4.x
+are supported platforms. Libreswan has been ported to
+Win2k/BSD/OSX in the past as well.
 
 Most distributions have native packaged support for Libreswan. Libreswan is
 available for RHEL, Fedora, Ubuntu, Debian, Arch, OpenWrt and more.
@@ -42,23 +41,30 @@ For Debian/Ubuntu
 
 	apt-get install libnss3-dev libnspr4-dev pkg-config libpam-dev \
 		libcap-ng-dev libcap-ng-utils libselinux-dev \
-		libcurl3-nss-dev flex bison gcc make \
-		libunbound-dev libnss3-tools libevent-dev xmlto
+		libcurl3-nss-dev flex bison gcc make libldns-dev \
+		libunbound-dev libnss3-tools libevent-dev xmlto \
+		libsystemd-dev
 
 	(there is no fipscheck library for these, set USE_FIPSCHECK=false)
+	(unbound is build without event api, set USE_DNSSEC=false)
 
-For Fedora/RHEL/CentOS
+For Fedora/RHEL7/CentOS7
 
-	yum install nss-devel nspr-devel pkgconfig pam-devel \
-		libcap-ng-devel libselinux-devel \
-		curl-devel flex bison gcc make \
-		fipscheck-devel unbound-devel libevent-devel xmlto
+	yum install audit-libs-devel bison curl-devel fipscheck-devel flex \
+		gcc ldns-devel libcap-ng-devel libevent-devel \
+		libseccomp-devel libselinux-devel make nspr-devel nss-devel \
+		pam-devel pkgconfig systemd-devel unbound-devel xmlto
 
-(note: for rhel6/centos6 use libevent2-devel)
+       (on rhel/centos unbound is too old, set USE_DNSSEC=false)
 
-For Fedora/RHEL7/CentOS7 with systemd:
+For RHEL6/CentOS6
 
-	yum install audit-libs-devel systemd-devel
+	yum install audit-libs-devel bison curl-devel fipscheck-devel flex \
+		gcc libcap-ng-devel libevent2-devel libseccomp-devel \
+		libselinux-devel make nspr-devel nss-devel pam-devel \
+		pkgconfig systemd-devel xmlto
+
+       (unbound is too old to build dnssec support, set USE_DNSSEC=false)
 
 Runtime requirements (usually already present on the system)
 
@@ -68,14 +74,20 @@ Runtime requirements (usually already present on the system)
 	       ensure you enable the iproute(2) package for busybox)
 
 	Python is used for "ipsec verify", which helps debugging problems
+	python-ipaddress is used for "ipsec show", which shows tunnels
 
 ## Compiling the userland and IKE daemon
 
     make programs
     sudo make install
 
+If you want to build without creating and installing manual pages, run:
+
+    make base
+    sudo make install-base
+
 Note: The ipsec-tools package or setkey is not needed. Instead the iproute2
-pacakge (>= 2.6.8) is required. Run `ipsec verify` to determine if your
+packakge (>= 2.6.8) is required. Run `ipsec verify` to determine if your
 system misses any of the requirements. This will also tell you if any of
 the kernel sysctl values needs changing.
 
@@ -87,15 +99,16 @@ name is called "ipsec".  For example, on RHEL7, one would use:
     systemctl enable ipsec.service
     systemctl start ipsec.service
 
-If unsure, the "ipsec" command can also be used to start or stop the ipsec
-service:
+If unsure of the specific init system used on the system, the "ipsec"
+command can also be used to start or stop the ipsec service:
 
-    ipsec setup start
-    ipsec setup stop
+    ipsec start
+    ipsec stop
 
 ## Configuration
 Most of the libreswan configuration is stored in /etc/ipsec.conf and
-/etc/ipsec.secrets.  See their respective man pages for more information.
+/etc/ipsec.secrets. Include files may be present in /etc/ipsec.d/
+See the respective man pages for more information.
 
 ## NSS initialisation
 Libreswan uses NSS to store private keys and X.509 certificates. The NSS
@@ -114,7 +127,8 @@ migrating from the old Openswan `/etc/ipsec.d/` directories to using NSS.
 ## Upgrading
 If you are upgrading from FreeS/WAN 1.x or Openswan 2.x to Libreswan 3.x,
 you might need to adjust your config files, although great care has been
-put into making the configuration files full backwards compatible.
+put into making the configuration files full backwards compatible. See
+also: https://libreswan.org/wiki/HOWTO:_openswan_to_libreswan_migration
 
 See 'man ipsec.conf' for the list of options to find any new features.
 
@@ -145,7 +159,7 @@ at https://bugs.libreswan.org/
 
 ## Security Information
 All security issues found that require public disclosure will
-receive proper CVE tracking numbers (see http://mitre.org/) and
+receive proper CVE tracking numbers (see https://www.mitre.org/) and
 will be co-ordinated via the vendor-sec / oss-security lists. A
 complete list of known security vulnerabilities is available at:
 
@@ -157,7 +171,7 @@ Libreswan can join the development mailing list "swan-dev" or talk to the
 development team on IRC in #swan on irc.freenode.net
 
 For those who want to track things a bit more closely, the
-swan-commits@lists.libreswan.org mailinglist will mail all the commit
+swan-commits@lists.libreswan.org mailing list will mail all the commit
 messages when they happen. This list is quite busy during active
 development periods.
 

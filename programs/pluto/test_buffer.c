@@ -1,11 +1,10 @@
 /*
- * Copyright (C) 2014 Andrew Cagney <andrew.cagney@gmail.com>
- * Copyright (C) 2015 Andrew Cagney <andrew.cagney@gmail.com>
+ * Copyright (C) 2014-2015,2017 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,8 +22,9 @@
 #include "nss.h"
 #include "pk11pub.h"
 
-#include "crypt_dbg.h"
+#include "crypt_symkey.h"
 #include "test_buffer.h"
+#include "ike_alg.h"
 
 static chunk_t zalloc_chunk(size_t length, const char *name)
 {
@@ -36,18 +36,19 @@ static chunk_t zalloc_chunk(size_t length, const char *name)
 }
 
 /*
- * Given a hex encode string, decode it into a chunk.
+ * Given a hex encoded string, decode it into a chunk.
  *
- * If this function fails, crash and burn.  Its been fed static data
+ * If this function fails, crash and burn.  It is fed static data
  * so should never ever have a problem.
+ * The caller must free the chunk.
  */
 chunk_t decode_hex_to_chunk(const char *original, const char *string)
 {
-	/* The decoded buffer can't be bigger than the encoded string.  */
-	chunk_t chunk = zalloc_chunk(strlen(string), original);
+	/* The decoded buffer can't be bigger than half the encoded string.  */
+	chunk_t chunk = zalloc_chunk((strlen(string)+1)/2, original);
 	chunk.len = 0;
 	const char *pos = string;
-	while (*pos != '\0') {
+	for (;;) {
 		/* skip leading/trailing space */
 		while (*pos == ' ') {
 			pos++;
@@ -55,35 +56,33 @@ chunk_t decode_hex_to_chunk(const char *original, const char *string)
 		if (*pos == '\0') {
 			break;
 		}
-		/* Expecting <HEX><HEX>, at least *pos is valid.  */
-		char buf[3];
-		int i = 0;
-		do {
-			buf[i++] = *pos++;
-		} while (*pos != ' ' && *pos != '\0' && i < 2);
-		buf[i] = '\0';
-		if (i != 2) {
-			loglog(RC_INTERNALERR,
-			       "decode_hex_to_chunk: hex buffer \"%s\" contains unexpected space or NUL at \"%s\"\n", string, pos);
-			exit_pluto(PLUTO_EXIT_NSS_FAIL);
+		/* Expecting <HEX><HEX> */
+		char buf[3] = { '\0', '\0', '\0' };
+		if (isxdigit(*pos)) {
+			buf[0] = *pos++;
+			if (isxdigit(*pos)) {
+				buf[1] = *pos++;
+			}
 		}
+		if (buf[1] == '\0') {
+			PASSERT_FAIL("expected hex digit at offset %tu in hex buffer \"%s\" but found \"%.1s\"",
+				     pos - string, string, pos);
+		}
+
 		char *end;
 		chunk.ptr[chunk.len] = strtoul(buf, &end, 16);
-		if (end - buf != 2) {
-			loglog(RC_INTERNALERR,
-			       "decode_hex_to_chunk: hex buffer \"%s\" invalid hex character at \"%s\"\n", string, pos);
-			exit_pluto(PLUTO_EXIT_NSS_FAIL);
-		}
+		passert(*end == '\0');
 		chunk.len++;
 	}
 	return chunk;
 }
 
 /*
- * Given an ASCII string, convert it onto a buffer of bytes.  If the
- * buffer is prefixed by 0x assume the contents are hex (with spaces)
- * and decode it; otherwise it is assumed that the ascii (minus the
+ * Given an ASCII string, convert it into a chunk of bytes.  If the
+ * string is prefixed by 0x assume the contents are hex (with spaces)
+ * and decode it; otherwise it is assumed that the ASCII (minus the
  * NUL) should be copied.
+ * The caller must free the chunk.
  */
 chunk_t decode_to_chunk(const char *prefix, const char *original)
 {
@@ -100,7 +99,19 @@ chunk_t decode_to_chunk(const char *prefix, const char *original)
 	return chunk;
 }
 
-int compare_chunk(const char *prefix,
+PK11SymKey *decode_hex_to_symkey(const char *prefix, const char *string)
+{
+	chunk_t chunk = decode_hex_to_chunk(prefix, string);
+	PK11SymKey *symkey = symkey_from_chunk(prefix, chunk);
+	freeanychunk(chunk);
+	return symkey;
+}
+
+/*
+ * Verify that the chunk's data is the same as actual.
+ * Note that it is assumed that there is enough data in actual.
+ */
+bool verify_chunk_data(const char *desc,
 		  chunk_t expected,
 		  u_char *actual)
 {
@@ -110,53 +121,52 @@ int compare_chunk(const char *prefix,
 		u_char r = actual[i];
 		if (l != r) {
 			/* Caller should issue the real log message.  */
-			DBG(DBG_CRYPT, DBG_log("compare_chunk: %s: bytes at %zd differ, expected %02x found %02x",
-					       prefix, i, l, r));
-			return 0;
+			DBG(DBG_CRYPT, DBG_log("verify_chunk_data: %s: bytes at %zd differ, expected %02x found %02x",
+					       desc, i, l, r));
+			return FALSE;
 		}
 	}
-	DBG(DBG_CRYPT, DBG_log("compare_chunk: %s: ok", prefix));
-	return 1;
+	DBG(DBG_CRYPT, DBG_log("verify_chunk_data: %s: ok", desc));
+	return TRUE;
 }
 
-int compare_chunks(const char *prefix,
+/* verify that expected is the same as actual */
+bool verify_chunk(const char *desc,
 		   chunk_t expected,
 		   chunk_t actual)
 {
 	if (expected.len != actual.len) {
 		DBG(DBG_CRYPT,
-		    DBG_log("compare_chunks: %s: expected length %zd but got %zd",
-			    prefix, expected.len, actual.len));
-		return 0;
+		    DBG_log("verify_chunk: %s: expected length %zd but got %zd",
+			    desc, expected.len, actual.len));
+		return FALSE;
 	}
-	return compare_chunk(prefix, expected, actual.ptr);
+	return verify_chunk_data(desc, expected, actual.ptr);
 }
 
-chunk_t extract_chunk(const char *prefix, const chunk_t input, size_t offset, size_t length)
+/* verify that expected is the same as actual */
+bool verify_symkey(const char *desc, chunk_t expected, PK11SymKey *actual)
 {
-	chunk_t output;
-	DBG(DBG_CRYPT, DBG_log("extract_chunk: %s: offset %zd length %zd",
-			       prefix, offset, length));
-	passert(offset + length <= input.len);
-	clonetochunk(output, input.ptr + offset, length, prefix);
-	DBG(DBG_CRYPT, DBG_dump_chunk(prefix, output));
-	return output;
+	if (expected.len != sizeof_symkey(actual)) {
+		DBGF(DBG_CRYPT, "%s: expected length %zd but got %zd",
+		     desc, expected.len, sizeof_symkey(actual));
+		return FALSE;
+	}
+	chunk_t chunk = chunk_from_symkey(desc, actual);
+	bool ok = verify_chunk_data(desc, expected, chunk.ptr);
+	freeanychunk(chunk);
+	return ok;
 }
 
 /*
- * Turn the raw key into a SECItem and then SymKey.
- *
- * Since slots are referenced counted and ImportSymKey adds a
- * reference, immediate freeing of the local slot is possible.
- *
- * ImportSymKey makes a copy of the key chunk so that can also be
- * released.
+ * Turn the raw key into SymKey.
  */
-PK11SymKey *decode_to_key(CK_MECHANISM_TYPE cipher_mechanism,
+PK11SymKey *decode_to_key(const struct encrypt_desc *encrypt_desc,
 			  const char *encoded_key)
 {
-	chunk_t raw_key = decode_to_chunk("key", encoded_key);
-	PK11SymKey *sym_key = chunk_to_symkey(cipher_mechanism, raw_key);
+	chunk_t raw_key = decode_to_chunk("raw_key", encoded_key);
+	PK11SymKey *symkey = encrypt_key_from_bytes("symkey", encrypt_desc,
+						    raw_key.ptr, raw_key.len);
 	freeanychunk(raw_key);
-	return sym_key;
+	return symkey;
 }

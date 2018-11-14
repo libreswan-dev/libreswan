@@ -68,13 +68,13 @@ sed -i 's/-Werror/#-Werror/' lib/liblwres/Makefile
 # Suse has no %{_libexecdir} directory, put it all in libdir instead (yuck)
 %{__make} \
   USERCOMPILE='-g $(RPM_OPT_FLAGS) -DGCC_LINT' \
-  INC_USRLOCAL=%{_prefix} \
   FINALBINDIR=%{_libdir}/ipsec \
   FINALLIBEXECDIR=%{_libdir}/ipsec \
-  MANTREE=%{_mandir} \
+  FINALMANDIR=%{_mandir} \
+  INC_DOCDIR=share/doc/packages \
   INC_RCDEFAULT=%{_initrddir} \
   INC_RCDIRS='/etc/init.d /etc/rc.d/init.d /etc/rc.d /sbin/init.d' \
-  INC_DOCDIR=share/doc/packages \
+  INC_USRLOCAL=%{_prefix} \
   programs
 %if %{buildklips}
 FS=$(pwd)
@@ -90,11 +90,11 @@ done
 %install
 %{__make} \
   DESTDIR=%{buildroot} \
-  INC_USRLOCAL=%{_prefix} \
   FINALBINDIR=%{_libdir}/ipsec \
   FINALLIBEXECDIR=%{_libdir}/ipsec \
-  MANTREE=%{buildroot}%{_mandir} \
+  FINALMANDIR=%{_mandir} \
   INC_RCDEFAULT=%{_initrddir} \
+  INC_USRLOCAL=%{_prefix} \
   install
 FS=$(pwd)
 rm -rf %{buildroot}/usr/share/doc/libreswan
@@ -186,7 +186,7 @@ exit 0
 
 * Mon Oct 10 2005 Paul Wouters <paul@xelerance.com>
 - Updated for klips on xen
-- added ldconfig for post klips to obtain ipsec module dependancies
+- added ldconfig for post klips to obtain ipsec module dependencies
 - Run 'make include' since on FC4 kernel source does not have the links yet.
 
 * Wed Jan  5 2005 Paul Wouters <paul@xelerance.com>

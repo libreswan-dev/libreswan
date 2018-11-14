@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -16,45 +16,120 @@ import os
 import re
 import subprocess
 import difflib
-from collections import defaultdict
+import weakref
+import gzip
+import bz2
 
-from fab import utilsdir
+from fab import logutil
+from fab import jsonutil
 
-def add_arguments(parser):
-    group = parser.add_argument_group("Postmortem arguments",
-                                      "Options for controlling the analysis of the test results")
-
-    # If it gets decided that these arguments should be enabled by
-    # default then the following can be used to make them like flags:
-    # nargs="?", type=argutil.boolean, const="true", default="false",
-    group.add_argument("--ignore-all-spaces", "-w",
-                       action="store_true",
-                       help="ignore (strip out) all white space")
-    group.add_argument("--ignore-blank-lines", "-B",
-                       action="store_true",
-                       help="ignore (strip out) blank lines")
-
-def log_arguments(logger, args):
-    logger.info("Postmortem arguments")
-    logger.info("  ignore-all-spaces: %s", args.ignore_all_spaces)
-    logger.info("  ignore-blank-lines: %s", args.ignore_blank_lines)
+# Strings used to mark up files; see also runner.py where it marks up
+# the file names.
+CUT = ">>>>>>>>>>cut>>>>>>>>>>"
+TUC = "<<<<<<<<<<tuc<<<<<<<<<<"
+DONE = CUT + " done " + TUC
 
 
-# Dictionary to accumulate all the errors for each host from an
-# individual test.
+class Resolution:
+    PASSED = "passed"
+    FAILED = "failed"
+    UNRESOLVED = "unresolved"
+    UNTESTED = "untested"
+    UNSUPPORTED = "unsupported"
+    def __init__(self):
+        self.state = None
+    def __str__(self):
+        return self.state
+    def __eq__(self, rhs):
+        return self.state == rhs
+    def isresolved(self):
+        return self.state in [self.PASSED, self.FAILED]
+    def unsupported(self):
+        assert(self.state in [None])
+        self.state = self.UNSUPPORTED
+    def untested(self):
+        assert(self.state in [None])
+        self.state = self.UNTESTED
+    def passed(self):
+        assert(self.state in [None])
+        self.state = self.PASSED
+    def failed(self):
+        assert(self.state in [self.FAILED, self.PASSED, self.UNRESOLVED])
+        if self.state in [self.FAILED, self.PASSED]:
+            self.state = self.FAILED
+    def unresolved(self):
+        assert(self.state in [self.PASSED, self.FAILED, self.UNRESOLVED, None])
+        self.state = self.UNRESOLVED
 
-class Errors:
+
+# Mapping between hosts and their issues and/or issues and their
+# hosts.
+#
+# Two maps are maintained:
+#
+# - the ISSUE_HOSTS map is indexed by ISSUE, each ISSUE entry then
+#   contains a list (set?) of hosts
+#
+#   This is so that code can easily determine if a specific issue,
+#   regardless of the HOST, has occurred.  All the programatic
+#   operators, such as __contains__(), are implemented based on this
+#   model.
+#
+#   XXX: Could probably re-implement issues as an extension of
+#   dictionary.
+#
+# - the HOST_ISSUES map is indexed by HOST, each HOST entry then
+#   contains a list (set?) of issues
+#
+#   This is used to display and dump the issues (__str__(), json()).
+#   It seems that the most user friendly format is:
+#   host:issue,... host:issue:,...
+
+class Issues:
+
+    ASSERTION = "ASSERTION"
+    EXPECTATION = "EXPECTATION"
+
+    CORE = "CORE"
+    SEGFAULT = "SEGFAULT"
+    GPFAULT = "GPFAULT"
+    PRINTF_NULL = "%NULL"
+
+    CRASHED = {ASSERTION, EXPECTATION, CORE, SEGFAULT, GPFAULT}
+
+    OUTPUT_MISSING = "output-missing"
+    OUTPUT_UNCHECKED = "output-unchecked"
+    OUTPUT_TRUNCATED = "output-truncated"
+    OUTPUT_WHITESPACE = "output-whitespace"
+    OUTPUT_DIFFERENT = "output-different"
+
+    ABSENT = "absent"
+
+    SANITIZER_FAILED = "sanitizer-failed"
+
+    BASELINE_FAILED = "baseline-failed"
+    BASELINE_PASSED = "baseline-passed"
+    BASELINE_MISSING = "baseline-missing"
+    BASELINE_WHITESPACE = "baseline-whitespace"
+    BASELINE_DIFFERENT = "baseline-different"
 
     def __init__(self, logger):
-        self.errors = defaultdict(set)
-        self.logger = logger
+        # Structure needs to be JSON friendly.
+        self._host_issues = {}
+        self._issue_hosts = {}
+        self._logger = logger
 
-    # this formatting is subject to infinite feedback.
+    # Both __str__() and json() dump the table in user friendly
+    # format.  That is:
     #
-    # Not exactly efficient.
+    #     host:issue,...  host:issue,...
+    #
+    # This is the opposite to what code expects - a dictionary
+    # structured issue:host,... .
+
     def __str__(self):
         s = ""
-        for host, errors in sorted(self.errors.items()):
+        for host, errors in sorted(self._host_issues.items()):
             if s:
                 s += " "
             if host:
@@ -62,119 +137,96 @@ class Errors:
             s += ",".join(sorted(errors))
         return s
 
-    # So, like a real collection, can easily test if non-empty.
+    def json(self):
+        return self._host_issues
+
+    # Programatic collections like interface.  This is indexed by
+    # ISSUE so that it is easy to query Issues to see if an ISSUE
+    # occurred on any host.
+
     def __bool__(self):
-        return len(self.errors) > 0
+        return len(self._issue_hosts) > 0
 
-    # Iterate over the actual errors, not who had them.  XXX: there's
-    # not much consistency between __iter__(), items(), __contains__()
-    # and __getitem__().  On the other hand, a hashmap iter isn't
-    # consistent either.
     def __iter__(self):
-        values = set()
-        for errors in self.errors.values():
-            values |= errors
-        return values.__iter__()
+        return self._issue_hosts.keys().__iter__()
 
-    def __contains__(self, item):
-        return item in self.errors
+    def __contains__(self, issue):
+        return issue in self._issue_hosts
 
-    def __getitem__(self, item):
-        return self.errors[item]
+    def __getitem__(self, issue):
+        return self._issue_hosts[issue]
 
-    def items(self):
-        return self.errors.items()
+    def add(self, issue, host):
+        if not host in self._host_issues:
+            self._host_issues[host] = []
+        if not issue in self._host_issues[host]:
+            self._host_issues[host].append(issue)
+        if not issue in self._issue_hosts:
+            self._issue_hosts[issue] = []
+        if not host in self._issue_hosts[issue]:
+            self._issue_hosts[issue].append(host)
+        self._logger.debug("host %s has issue %s", host, issue)
 
-    def add(self, error, host=None):
-        self.errors[host].add(error)
-        self.logger.debug("host %s has error %s", host, error)
 
-    def search(self, regex, string, error, host):
-        self.logger.debug("searching host %s for '%s' (error %s)", host, regex, error)
-        if re.search(regex, string):
-            self.add(error, host)
-            return True
-        else:
-            return False
-
-    def grep(self, regex, filename, error, host):
-        self.logger.debug("grepping host %s file '%s' for '%s' (error %s)", host, filename, regex, error)
-        command = ['grep', '-e', regex, filename]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        if process.returncode == 0:
-            self.add(error, host)
-            return True
-        else:
-            return False
-
-def strip_space(s):
+def _strip(s):
     s = re.sub(r"[ \t]+", r"", s)
-    return s
-
-def strip_blank_line(s):
     s = re.sub(r"\n+", r"\n", s)
     s = re.sub(r"^\n", r"", s)
     return s
 
-# Compare two strings; hack to mimic "diff -N -w -B"?
-# Returns:
-#    [], None
-#    [diff..], True # if white space only
-#    [diff...], False
-def fuzzy_diff(logger, ln, l, rn, r,
-               strip_spaces=False,
-               strip_blank_lines=False):
+def _whitespace(l, r):
+    """Return true if L and R are the same after stripping white space"""
+    return _strip(l) == _strip(r)
+
+def _diff(logger, ln, l, rn, r):
+    """Return the difference between two strings"""
+
     if l == r:
-        # fast path
-        logger.debug("fuzzy_diff fast match")
-        return [], None
-    # Could be more efficient
-    if strip_spaces:
-        l = strip_space(l)
-        r = strip_space(r)
-    if strip_blank_lines:
-        l = strip_blank_line(l)
-        r = strip_blank_line(r)
+        # slightly faster path
+        logger.debug("_diff '%s' and '%s' fast match", ln, rn)
+        return []
     # compare
     diff = list(difflib.unified_diff(l.splitlines(), r.splitlines(),
                                      fromfile=ln, tofile=rn,
                                      lineterm=""))
-    logger.debug("fuzzy_diff: %s", diff)
+    logger.debug("_diff: %s", diff)
     if not diff:
-        return [], None
-    # see if the problem was just white space; hack
-    if not strip_spaces and not strip_blank_lines:
-        l = strip_blank_line(strip_space(l))
-        r = strip_blank_line(strip_space(r))
-        if l == r:
-            return diff, True
-    return diff, False
+        # Always return a list.
+        return []
+    return diff
 
 
-def sanitize_output(logger, raw_file, test_directory):
-    command = [ utilsdir.relpath("sanitizer.sh"), raw_file, test_directory ]
+def _sanitize_output(logger, raw_path, test):
+    # Run the sanitizer found next to the test_sanitize_directory.
+    command = [
+        test.testing_directory("utils", "sanitizer.sh"),
+        raw_path,
+        test.testing_directory("pluto", test.name)
+    ]
     logger.debug("sanitize command: %s", command)
     # Note: It is faster to re-read the file than read the
     # pre-loaded raw console output.
-    process = subprocess.Popen(command, stdout=subprocess.PIPE)
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     stdout, stderr = process.communicate()
     logger.debug("sanitized output:\n%s", stdout)
     if process.returncode or stderr:
         # any hint of an error
         logger.error("sanitize command '%s' failed; exit code %s; stderr: '%s'",
-                     command, process.returncode, stderr)
+                     command, process.returncode, stderr.decode("utf8"))
         return None
     return stdout.decode("utf-8")
 
 
-def load_output(logger, output_file):
-    if os.path.exists(output_file):
-        logger.debug("loading pre-generated file: %s", output_file)
-        with open(output_file) as f:
+def _load_file(logger, filename):
+    """Load the specified file; return None if it does not exist"""
+
+    if os.path.exists(filename):
+        logger.debug("loading file: %s", filename)
+        with open(filename) as f:
             return f.read()
     else:
-        logger.debug("no pre-generated file to load: %s", output_file)
+        logger.debug("file %s does not exist", filename)
     return None
 
 
@@ -184,188 +236,286 @@ def load_output(logger, output_file):
 class TestResult:
 
     def __str__(self):
-        if self.finished is True:
-            if self.passed is True:
-                return "passed"
-            elif self.passed is False:
-                return "failed"
-            else:
-                return "unknown"
-        elif self.finished is False:
-            # Sounds good doesn't mean anything.  It might be because
-            # the test aborted, but it could also be because the test
-            # is still in-progress.
-            return "incomplete"
-        else:
-            return "untested"
+        return str(self.resolution)
 
     def __bool__(self):
-        # Things started - passed is valid
-        return self.finished is not None
+        """True if the test was attempted.
 
-    def __init__(self, test, skip_diff, skip_sanitize,
-                 output_directory=None, test_finished=None,
-                 update_diff=False, update_sanitize=False,
-                 strip_spaces=False, strip_blank_lines=False):
+        That is POSIX 1003.3 PASS, FAIL, or UNRESOLVED (which leaves
+        UNTESTED).
 
+        """
+        return self.resolution in [self.resolution.PASSED, self.resolution.FAILED, self.resolution.UNRESOLVED]
+
+    def __init__(self, logger, test, quick, output_directory=None):
+
+        # Set things up for passed
+        self.logger = logger
         self.test = test
-        self.passed = None
-        self.finished = None
-        self.errors = Errors(test.logger)
+        self.resolution = Resolution()
+        self.issues = Issues(self.logger)
         self.diffs = {}
-        self.sanitized_console_output = {}
+        self.sanitized_output = {}
+        self.grub_cache = {}
+        self.output_directory = output_directory or test.output_directory
+        # times
+        self._start_time = None
+        self._end_time = None
+        self._runtime = None
+        self._boot_time = None
+        self._script_time = None
 
-        output_directory = output_directory or test.output_directory
-
-        # An OUTPUT directory is a clear indicator that something was
-        # started.
-        if not os.path.exists(output_directory):
-            test.logger.debug("output directory missing: %s", output_directory)
+        # If there is no OUTPUT directory the result is UNTESTED -
+        # presence of the OUTPUT is a clear indicator that some
+        # attempt was made to run the test.
+        if not os.path.exists(self.output_directory):
+            self.resolution.untested()
+            self.logger.debug("output directory missing: %s", self.output_directory)
             return
-        if test_finished is None:
-            # Use RESULT as a proxy for a test finishing.  It isn't
-            # 100% reliable since an in-progress test looks list like
-            # an aborted test.
-            self.finished = os.path.isfile(test.result_file(output_directory));
-        else:
-            self.finished = test_finished;
 
-        # Be optimistic; passed is only really valid when finished is
-        # true.
-        self.passed = True
+        # Start out assuming that it passed and then prove otherwise.
+        self.resolution.passed()
 
-        # crash or other unexpected behaviour.
+        # did pluto crash?
         for host_name in test.host_names:
-            pluto_log = os.path.join(output_directory, host_name + ".pluto.log")
-            if os.path.exists(pluto_log):
-                test.logger.debug("checking '%s' for errors", pluto_log)
-                if self.errors.grep("ASSERTION FAILED", pluto_log, "ASSERTION", host_name):
-                    self.passed = False
-                # XXX: allow expection failures?
-                self.errors.grep("EXPECTATION FAILED", pluto_log, "EXPECTATION", host_name)
+            pluto_log_filename = host_name + ".pluto.log"
+            if self.grub(pluto_log_filename, "ASSERTION FAILED"):
+                self.issues.add(Issues.ASSERTION, host_name)
+                self.resolution.failed()
+            if self.grub(pluto_log_filename, "EXPECTATION FAILED"):
+                self.issues.add(Issues.EXPECTATION, host_name)
+                # self.resolution.failed() XXX: allow expection failures?
+            if self.grub(pluto_log_filename, "\(null\)"):
+                self.issues.add(Issues.PRINTF_NULL, host_name)
+                self.resolution.failed()
 
         # Check the raw console output for problems and that it
         # matches expected output.
         for host_name in test.host_names:
 
-            # There should always be raw console output from all
-            # hosts.  If there isn't then there's a big problem and
-            # little point with continuing checks for this host.
-
-            raw_console_file = os.path.join(output_directory,
-                                            host_name + ".console.verbose.txt")
-            test.logger.debug("host %s raw console output '%s'", host_name, raw_console_file)
-            if not os.path.exists(raw_console_file):
-                self.errors.add("output-missing", host_name)
-                self.passed = False
-                continue
-
-            test.logger.debug("host %s loading raw console output", host_name)
-            with open(raw_console_file) as f:
-                raw_console_output = f.read()
-
-            test.logger.debug("host %s checking raw console output for signs of a crash", host_name)
-            if self.errors.search(r"[\r\n]CORE FOUND", raw_console_output, "CORE", host_name):
-                # keep None
-                self.passed = False
-            if self.errors.search(r"SEGFAULT", raw_console_output, "SEGFAULT", host_name):
-                # keep None
-                self.passed = False
-            if self.errors.search(r"GPFAULT", raw_console_output, "GPFAULT", host_name):
-                # keep None
-                self.passed = False
-
-            # Incomplete output won't match expected output so skip
-            # any comparisons.
+            # Check that the host's raw output is present.
             #
-            # For moment skip this as the marker for complete output isn't reliable?
+            # If there is no output at all then the test crashed badly
+            # (for instance, while trying to boot domains).
+            #
+            # Since things really screwed up, mark the test as
+            # UNRESOLVED and give up.
 
-            #test.logger.debug("host %s checking if raw console output was incomplete", host_name)
-            #if not "# : ==== end ====" in raw_console_output:
-            #    self.errors.add("output-incomplete", host_name)
-            #    self.passed = False
-            #    continue
-
-            sanitized_console_file = os.path.join(output_directory,
-                                                  host_name + ".console.txt")
-            test.logger.debug("host %s sanitize console output '%s'", host_name, sanitized_console_file)
-            sanitized_console_output = None
-            if skip_sanitize:
-                sanitized_console_output = load_output(test.logger, sanitized_console_file)
-            if not sanitized_console_output:
-                sanitized_console_output = sanitize_output(test.logger, raw_console_file, test.sanitize_directory)
-            if not sanitized_console_output:
-                self.errors.add("sanitizer-failed", host_name)
+            raw_output_filename = host_name + ".console.verbose.txt"
+            if self.grub(raw_output_filename) is None:
+                self.issues.add(Issues.OUTPUT_MISSING, host_name)
+                self.resolution.unresolved()
+                # With no raw console output, there's little point in
+                # trying validating it.  Skip remaining tests for this
+                # host.
                 continue
-            if update_sanitize:
-                test.logger.debug("host %s updating sanitized output file: %s", host_name, sanitized_console_file)
-                with open(sanitized_console_file, "w") as f:
-                    f.write(sanitized_console_output)
 
-            self.sanitized_console_output[host_name] = sanitized_console_output
+            # Check the host's raw output for signs of a crash.
 
-            expected_sanitized_console_output_file = os.path.join(test.sanitize_directory, host_name + ".console.txt")
-            test.logger.debug("host %s comparing against known-good output '%s'", host_name, expected_sanitized_console_output_file)
-            if os.path.exists(expected_sanitized_console_output_file):
+            self.logger.debug("host %s checking raw console output for signs of a crash",
+                              host_name)
+            if self.grub(raw_output_filename, r"[\r\n]CORE FOUND"):
+                self.issues.add(Issues.CORE, host_name)
+                self.resolution.failed()
+            if self.grub(raw_output_filename, r"SEGFAULT"):
+                self.issues.add(Issues.SEGFAULT, host_name)
+                self.resolution.failed()
+            if self.grub(raw_output_filename, r"GPFAULT"):
+                self.issues.add(Issues.GPFAULT, host_name)
+                self.resolution.failed()
+            if self.grub(raw_output_filename, r"\(null\)"):
+                self.issues.add(Issues.PRINTF_NULL, host_name)
+                self.resolution.failed()
 
-                diff, whitespace = [], None
+            # Check that the host's raw output is complete.
+            #
+            # The output can become truncated for several reasons: the
+            # test is a work-in-progress; it crashed due to a timeout;
+            # or it is still being run.
+            #
+            # Don't try to match the prompt ("#").  If this is the
+            # first command in the script, the prompt will not appear
+            # in the output.
+            #
+            # When this happens, mark it as a FAIL.  The
+            # test-in-progress case was hopefully handled further back
+            # with the RESULT hack forcing the test to UNRESOLVED.
 
-                sanitized_console_diff_file = os.path.join(output_directory, host_name + ".console.diff")
-                if skip_diff:
-                    sanitized_console_diff = load_output(test.logger, sanitized_console_diff_file)
-                    # be consistent with fuzzy_diff which returns a list
-                    # of lines.
-                    if sanitized_console_diff:
-                        diff, whitespace = sanitized_console_diff.splitlines(), False
-                if not diff:
-                    with open(expected_sanitized_console_output_file) as f:
-                        expected_sanitized_console_output = f.read()
-                    diff, whitespace = fuzzy_diff(test.logger,
-                                                  "MASTER/" + test.name + "/" + host_name + ".console.txt",
-                                                  expected_sanitized_console_output,
-                                                  "OUTPUT/" + test.name + "/" + host_name + ".console.txt",
-                                                  sanitized_console_output,
-                                                  strip_spaces=strip_spaces,
-                                                  strip_blank_lines=strip_blank_lines)
-                if update_diff:
-                    test.logger.debug("host %s updating diff file %s", host_name, sanitized_console_diff_file)
-                    with open(sanitized_console_diff_file, "w") as f:
-                        for line in diff:
-                            f.write(line)
-                            f.write("\n")
+            ending = ": ==== end ===="
+            logger.debug("host %s checking if raw console output contains '%s' (or '%s')",
+                         host_name, DONE, ending)
+            if self.grub(raw_output_filename, DONE) is None \
+            and self.grub(raw_output_filename, ending) is None:
+                # this is probably truncated output; but if the test
+                # is old it may not be the case. and an unresolved
+                # test, but need to first exclude other options.
+                self.issues.add(Issues.OUTPUT_TRUNCATED, host_name)
+                result_file = os.path.join(self.output_directory, "RESULT")
+                if os.path.isfile(result_file):
+                    self.resolution.failed()
+                else:
+                    self.resolution.unresolved()
+
+            # Sanitize what ever output there is and save it.
+            #
+            # Even when the output is seemingly truncated this is
+            # useful.
+
+            sanitized_output_path = os.path.join(self.output_directory,
+                                                 host_name + ".console.txt")
+            self.logger.debug("host %s sanitize console output '%s'",
+                              host_name, sanitized_output_path)
+            sanitized_output = None
+            if quick:
+                sanitized_output = _load_file(self.logger,
+                                              sanitized_output_path)
+            if sanitized_output is None:
+                sanitized_output = _sanitize_output(self.logger,
+                                                    os.path.join(self.output_directory, raw_output_filename),
+                                                    test)
+            if sanitized_output is None:
+                self.issues.add(Issues.SANITIZER_FAILED, host_name)
+                self.resolution.unresolved()
+                continue
+            self.sanitized_output[host_name] = sanitized_output
+
+            expected_output_path = test.testing_directory("pluto", test.name,
+                                                          host_name + ".console.txt")
+            self.logger.debug("host %s comparing against known-good output '%s'",
+                              host_name, expected_output_path)
+
+            expected_output = _load_file(self.logger, expected_output_path)
+            if expected_output is None:
+                self.issues.add(Issues.OUTPUT_UNCHECKED, host_name)
+                self.resolution.unresolved()
+                continue
+
+            diff = None
+            diff_filename = host_name + ".console.diff"
+
+            if quick:
+                # Try to load the existing diff file.  Like _diff()
+                # save a list of lines.
+                diff = self.grub(diff_filename)
+                if diff is not None:
+                    diff = diff.splitlines()
+            if diff is None:
+                # use brute force
+                diff = _diff(self.logger,
+                             "MASTER/" + test.directory + "/" + host_name + ".console.txt",
+                             expected_output,
+                             "OUTPUT/" + test.directory + "/" + host_name + ".console.txt",
+                             sanitized_output)
+
+            if diff:
+                self.diffs[host_name] = diff
+                whitespace = _whitespace(expected_output,
+                                         sanitized_output)
+                self.resolution.failed()
+                if whitespace:
+                    self.issues.add(Issues.OUTPUT_WHITESPACE, host_name)
+                else:
+                    self.issues.add(Issues.OUTPUT_DIFFERENT, host_name)
+
+    def save(self, output_directory=None):
+        output_directory = output_directory or self.output_directory
+        # write the sanitized console output
+        for host_name in self.test.host_names:
+            if host_name in self.sanitized_output:
+                sanitized_output = self.sanitized_output[host_name]
+                sanitized_output_filename = host_name + ".console.txt"
+                sanitized_output_pathname = os.path.join(output_directory,
+                                                         sanitized_output_filename)
+                self.logger.debug("host %s writing sanitized output file: %s",
+                                  host_name, sanitized_output_pathname)
+                with open(sanitized_output_pathname, "w") as f:
+                    f.write(sanitized_output)
+        # write the diffs
+        for host_name in self.test.host_names:
+            # Always create the diff file; when there is no diff
+            # leave it empty.
+            diff = host_name in self.diffs and self.diffs[host_name]
+            diff_filename = host_name + ".console.diff"
+            diff_pathname = os.path.join(output_directory, diff_filename)
+            self.logger.debug("host %s writing diff file %s",
+                              host_name, diff_pathname)
+            with open(diff_pathname, "w") as f:
                 if diff:
-                    self.diffs[host_name] = diff
-                    if whitespace:
-                        self.errors.add("output-whitespace", host_name)
-                    else:
-                        self.passed = False
-                        self.errors.add("output-different", host_name)
-            elif host_name == "nic":
-                # NIC never gets its console output checked.
-                test.logger.debug("host %s has unchecked console output", host_name)
-            else:
-                self.errors.add("output-unchecked", host_name)
+                    for line in diff:
+                        f.write(line)
+                        f.write("\n")
+
+    def grub(self, filename, regex=None, cast=lambda x: x):
+        """Grub around FILENAME to find regex"""
+        self.logger.debug("grubbing '%s' for '%s'", filename, regex)
+        # Find/load the file, and uncompress when needed.
+        if not filename in self.grub_cache:
+            self.grub_cache[filename] = None
+            for suffix, open_op in [("", open), (".gz", gzip.open), (".bz2", bz2.open),]:
+                path = os.path.join(self.output_directory, filename + suffix)
+                if os.path.isfile(path):
+                    self.logger.debug("loading '%s' into cache", path)
+                    with open_op(path, "rt") as f:
+                        self.grub_cache[filename] = f.read()
+                        break
+        contents = self.grub_cache[filename]
+        if contents is None:
+            return None
+        if regex is None:
+            return contents
+        match = re.search(regex, contents, re.MULTILINE)
+        if not match:
+            return None
+        group = match.group(len(match.groups()))
+        self.logger.debug("grub '%s' matched '%s'", regex, group)
+        return cast(group)
+
+    def start_time(self):
+        if not self._start_time:
+            # starting debug log at 2018-08-15 13:00:12.275358
+            self._start_time = self.grub("debug.log", r"starting debug log at (.*)$",
+                                   cast=jsonutil.ptime)
+        return self._start_time
+
+    def end_time(self):
+        if not self._end_time:
+            # ending debug log at 2018-08-15 13:01:31.602533
+            self._end_time = self.grub("debug.log", r"ending debug log at (.*)$",
+                                 cast=jsonutil.ptime)
+        return self._end_time
+
+    def runtime(self):
+        if not self._runtime:
+            # stop testing basic-pluto-01 (test 2 of 756) after 79.3 seconds
+            self._runtime = self.grub("debug.log", r": stop testing .* after (.*) second",
+                                cast=float)
+        return self._runtime
+
+    def boot_time(self):
+        if not self._boot_time:
+            # stop booting domains after 56.9 seconds
+            self._boot_time = self.grub("debug.log", r": stop booting domains after (.*) second",
+                                  cast=float)
+        return self._boot_time
+
+    def script_time(self):
+        if not self._script_time:
+            # stop running scripts east:eastinit.sh ... after 22.4 seconds
+            self._script_time = self.grub("debug.log", r": stop running scripts .* after (.*) second",
+                                    cast=float)
+        return self._script_time
 
 
 # XXX: given that most of args are passed in unchagned, this should
-# change to some type of object.
+# change to some type of result factory.
 
-def mortem(test, args, baseline=None, skip_diff=False, skip_sanitize=False,
-           output_directory=None, test_finished=None,
-           update=False, update_diff=False, update_sanitize=False):
+def mortem(test, args, domain_prefix="",
+           baseline=None, output_directory=None, quick=False):
 
-    update_diff = update or update_diff
-    update_sanitize = update or update_sanitize
+    logger = logutil.getLogger(domain_prefix, __name__, test.name)
 
-    strip_spaces = args.ignore_all_spaces
-    strip_blank_lines = args.ignore_blank_lines
-
-    test_result = TestResult(test, skip_diff, skip_sanitize,
-                             output_directory, test_finished=test_finished,
-                             update_diff=update_diff,
-                             update_sanitize=update_sanitize,
-                             strip_spaces=strip_spaces,
-                             strip_blank_lines=strip_blank_lines)
+    test_result = TestResult(logger, test, quick,
+                             output_directory=output_directory)
 
     if not test_result:
         return test_result
@@ -375,7 +525,7 @@ def mortem(test, args, baseline=None, skip_diff=False, skip_sanitize=False,
 
     # For "baseline", the general idea is that "kvmresults.py | grep
     # baseline" should print something when either a regression or
-    # progression has occured.  For instance:
+    # progression has occurred.  For instance:
     #
     #    - a test passing but the baseline failing
     #
@@ -387,57 +537,73 @@ def mortem(test, args, baseline=None, skip_diff=False, skip_sanitize=False,
     # same way.
 
     if not test.name in baseline:
-        test_result.errors.add("absent", "baseline")
+        test_result.issues.add(Issues.ABSENT, "baseline")
         return test_result
+
+    # When loading the baseline results use "quick" so that the
+    # original results are used.  This seems to be the best of a bad
+    # bunch.
+    #
+    # Since that the baseline was generated using an old sanitizer and
+    # reference output, using the latest sanitizer scripts (in
+    # testing/) can, confusingly, lead to baselines results being
+    # identified as failures failing yet the diffs show a pass.
+    #
+    # OTOH, when this goes to compare the results against the
+    # baseline, first putting them through the latest sanitizer tends
+    # to result in better diffs.
 
     base = baseline[test.name]
-    baseline_result = TestResult(base, skip_diff, skip_sanitize,
-                                 strip_spaces=strip_spaces,
-                                 strip_blank_lines=strip_blank_lines)
-    if not baseline_result:
-        if not test_result.passed:
-            test_result.errors.add("missing", "baseline")
+    baseline_result = TestResult(logger, base, quick=True)
+
+    if not baseline_result.resolution in [test_result.resolution.PASSED,
+                                          test_result.resolution.FAILED]:
+        test_result.issues.add(str(baseline_result), "baseline")
         return test_result
 
-    if test_result.passed and baseline_result.passed:
+    if test_result.resolution in [test_result.resolution.PASSED] \
+    and baseline_result.resolution in [baseline_result.resolution.PASSED]:
         return test_result
 
     for host_name in test.host_names:
 
-        if host_name is "nic":
+        # result missing output; still check baseline ..
+        if host_name not in test_result.sanitized_output:
+            if host_name in baseline_result.sanitized_output:
+                if host_name in baseline_result.diffs:
+                    test_result.issues.add(Issues.BASELINE_FAILED, host_name)
+                else:
+                    test_result.issues.add(Issues.BASELINE_PASSED, host_name)
             continue
 
-        if not host_name in test_result.sanitized_console_output:
-            continue
-
-        if not host_name in baseline_result.sanitized_console_output:
-            test_result.errors.add("baseline-missing", host_name)
+        if not host_name in baseline_result.sanitized_output:
+            test_result.issues.add(Issues.BASELINE_MISSING, host_name)
             continue
 
         if not host_name in test_result.diffs:
             if host_name in baseline_result.diffs:
-                test_result.errors.add("baseline-failed", host_name)
+                test_result.issues.add(Issues.BASELINE_FAILED, host_name)
             continue
 
         if not host_name in baseline_result.diffs:
-            test_result.errors.add("baseline-passed", host_name)
+            test_result.issues.add(Issues.BASELINE_PASSED, host_name)
             continue
 
-        baseline_diff, baseline_whitespace = fuzzy_diff(test.logger,
-                                                        "BASELINE/" + test.name + "/" + host_name + ".console.txt",
-                                                        baseline_result.sanitized_console_output[host_name],
-                                                        "OUTPUT/" + test.name + "/" + host_name + ".console.txt",
-                                                        test_result.sanitized_console_output[host_name],
-                                                        strip_spaces=strip_spaces,
-                                                        strip_blank_lines=strip_blank_lines)
+        baseline_diff = _diff(logger,
+                              "BASELINE/" + test.directory + "/" + host_name + ".console.txt",
+                              baseline_result.sanitized_output[host_name],
+                              "OUTPUT/" + test.directory + "/" + host_name + ".console.txt",
+                              test_result.sanitized_output[host_name])
         if baseline_diff:
+            baseline_whitespace = _whitespace(baseline_result.sanitized_output[host_name],
+                                              test_result.sanitized_output[host_name])
             if baseline_whitespace:
-                test_result.errors.add("baseline-whitespace", host_name)
+                test_result.issues.add(Issues.BASELINE_WHITESPACE, host_name)
             else:
-                test_result.errors.add("baseline-different", host_name)
+                test_result.issues.add(Issues.BASELINE_DIFFERENT, host_name)
             # update the diff to something hopefully closer?
-            test_result.diffs[host_name] = baseline_diff
+            # test_result.diffs[host_name] = baseline_diff
         # else:
-        #    test_result.errors.add("baseline-failed", host_name)
+        #    test_result.issues.add("baseline-failed", host_name)
 
     return test_result

@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -40,10 +40,10 @@ void pluto_sd_init(void) {
 	libreswan_log("systemd watchdog for ipsec service configured with timeout of %"PRIu64" usecs", sd_usecs);
 	sd_secs = sd_usecs / 2 / 1000000; /* suggestion from sd_watchdog_enabled(3) */
 	libreswan_log("watchdog: sending probes every %lu secs", sd_secs);
-        /* tell systemd that we have finished starting up */
+	/* tell systemd that we have finished starting up */
 	pluto_sd(PLUTO_SD_START, SD_REPORT_NO_STATUS);
-        /* start the keepalive events */
-        event_schedule(EVENT_SD_WATCHDOG, sd_secs, NULL);
+	/* start the keepalive events */
+	event_schedule_s(EVENT_SD_WATCHDOG, sd_secs, NULL);
 }
 
 /*
@@ -83,5 +83,5 @@ void pluto_sd(int action, int status)
 void sd_watchdog_event(void)
 {
 	pluto_sd(PLUTO_SD_WATCHDOG, SD_REPORT_NO_STATUS);
-	event_schedule(EVENT_SD_WATCHDOG, sd_secs, NULL);
+	event_schedule_s(EVENT_SD_WATCHDOG, sd_secs, NULL);
 }
