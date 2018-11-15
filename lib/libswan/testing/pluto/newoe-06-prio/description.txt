@@ -1,3 +1,0 @@
-Test where road and east can both build a tunnel using AUTHNULL
-or RSA. It should prefer RSA and a ping should setup the right
-RSA based IKE session.

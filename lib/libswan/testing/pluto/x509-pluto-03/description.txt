@@ -1,2 +1,0 @@
-As basic-pluto-01 but east uses a CA to validate west. west sends a CR to east
-as well as its cert.

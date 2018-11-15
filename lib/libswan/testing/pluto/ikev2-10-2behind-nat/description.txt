@@ -1,1 +1,0 @@
-This emulates two clients behind the same NAT.

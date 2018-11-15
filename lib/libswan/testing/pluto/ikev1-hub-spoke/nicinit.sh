@@ -1,2 +1,0 @@
-iptables -F
-: ==== end ====

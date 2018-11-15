@@ -1,2 +1,0 @@
-west sends 'signedbyother' cert.
-east does not have 'otherca' loaded, certificate verification fails.

@@ -1,2 +1,0 @@
-east and west have each other's cert loaded,
-and no cert is sent.

@@ -1,3 +1,0 @@
-Testing AH with des with NETKEY.
-
-This test should fail as we should not support AH_DES

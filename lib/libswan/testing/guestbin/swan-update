@@ -1,4 +1,0 @@
-#!/bin/sh
-
-/testing/guestbin/swan-build "$@" && \
-    /testing/guestbin/swan-install "$@"

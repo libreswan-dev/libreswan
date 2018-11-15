@@ -1,3 +1,0 @@
-As ikev2-algo-esn-01 but now we test esn=either on east with esn=yes on west
-
-The connection should establish

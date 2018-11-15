@@ -1,4 +1,0 @@
-Basic pluto with IKEv1 using PSK on the responder (east), and Strongswan on
-the initiator (west).
-
-This tests SHA2 with AES128

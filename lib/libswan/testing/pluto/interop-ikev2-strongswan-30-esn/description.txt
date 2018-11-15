@@ -1,2 +1,0 @@
-Interop test for ESN with strongswan
-

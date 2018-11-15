@@ -1,3 +1,0 @@
-as x509-pluto-03 but now west's certificate is signed by the wrong CA
-
-The connection should fail

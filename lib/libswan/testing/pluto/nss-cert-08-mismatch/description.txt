@@ -1,3 +1,0 @@
-Test for X.509 initiator validating remote peer ID when set in config
-
-The connection should fail

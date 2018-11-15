@@ -1,2 +1,0 @@
-Interop testcase for strongswan initiator behind nat
-

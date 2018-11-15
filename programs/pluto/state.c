@@ -65,8 +65,6 @@
 #include "demux.h"	/* needs packet.h */
 #include "pending.h"
 #include "ipsec_doi.h"	/* needs demux.h and state.h */
-
-#include "cookie.h"
 #include "crypto.h"
 #include "crypt_symkey.h"
 #include "spdb.h"
@@ -258,6 +256,7 @@ static enum categories categorize_state(struct state *st,
 		return CAT_IGNORE;
 
 	case STATE_PARENT_I1:
+	case STATE_PARENT_R0:
 	case STATE_PARENT_R1:
 	case STATE_AGGR_R0:
 	case STATE_AGGR_I1:
@@ -633,69 +632,6 @@ void v1_delete_state_by_username(struct state *st, void *name)
 		delete_my_family(st, FALSE);
 		/* note: no md->st to clear */
 	}
-}
-
-static bool ikev2_child_eq_pst_msgid(const struct state *st,
-		so_serial_t psn, msgid_t st_msgid)
-{
-	if (st->st_clonedfrom == psn &&
-			st->st_msgid == st_msgid &&
-			IS_CHILD_IPSECSA_RESPONSE(st)) {
-		return TRUE;
-	}
-	return FALSE;
-}
-
-static bool ikev2_child_resp_eq_pst_msgid(const struct state *st,
-		so_serial_t psn, msgid_t st_msgid)
-{
-	if (st->st_clonedfrom == psn &&
-			st->st_msgid == st_msgid &&
-			IS_CHILD_SA_RESPONDER(st)) {
-		return TRUE;
-	}
-	return FALSE;
-}
-
-/*
- * Find the state object that match the following:
- *	st_msgid (IKEv2 Child responder state)
- *	parent duplicated from
- *	expected state
- */
-
-struct state *resp_state_with_msgid(so_serial_t psn, msgid_t st_msgid)
-{
-	passert(psn >= SOS_FIRST);
-
-	FOR_EACH_COOKIED_STATE(st, {
-		if (ikev2_child_resp_eq_pst_msgid(st, psn, st_msgid))
-			return st;
-	});
-	DBG(DBG_CONTROL,
-		DBG_log("no waiting child state matching pst #%lu msg id %u",
-			psn, ntohs(st_msgid)));
-	return NULL;
-}
-
-/*
- * Find the state object that match the following:
- *	st_msgid (IKE/IPsec initiator state)
- *	parent duplicated from
- *	expected state
- */
-struct state *state_with_parent_msgid(so_serial_t psn, msgid_t st_msgid)
-{
-	passert(psn >= SOS_FIRST);
-
-	FOR_EACH_COOKIED_STATE(st, {
-		if (ikev2_child_eq_pst_msgid(st, psn, st_msgid))
-			return st;
-	});
-	DBG(DBG_CONTROL,
-		DBG_log("no waiting child state matching pst #%lu msg id %u",
-			psn, ntohs(st_msgid)));
-	return NULL;
 }
 
 /*
@@ -1614,8 +1550,8 @@ struct state *find_state_ikev1(const uint8_t *icookie,
 			DBG(DBG_CONTROL,
 			    DBG_log("v1 peer and cookies match on #%lu, provided msgid %08" PRIx32 " == %08" PRIx32,
 				    st->st_serialno,
-				    ntohl(msgid),
-				    ntohl(st->st_msgid)));
+				    msgid,
+				    st->st_msgid));
 			if (msgid == st->st_msgid)
 				break;
 		}
@@ -1643,8 +1579,8 @@ struct state *find_state_ikev1_init(const uint8_t *icookie,
 			DBG(DBG_CONTROL,
 			    DBG_log("v1 peer and icookie match on #%lu, provided msgid %08" PRIx32 " == %08" PRIx32,
 				    st->st_serialno,
-				    ntohl(msgid),
-				    ntohl(st->st_msgid)));
+				    msgid,
+				    st->st_msgid));
 			if (msgid == st->st_msgid)
 				break;
 		}
@@ -1844,9 +1780,9 @@ struct state *ikev1_find_info_state(const u_char *icookie,
 		DBG(DBG_CONTROL,
 		    DBG_log("peer and cookies match on #%lu; msgid=%08" PRIx32 " st_msgid=%08" PRIx32 " st_msgid_phase15=%08" PRIx32,
 			    st->st_serialno,
-			    ntohl(msgid),
-			    ntohl(st->st_msgid),
-			    ntohl(st->st_msgid_phase15)));
+			    msgid,
+			    st->st_msgid,
+			    st->st_msgid_phase15));
 		if ((st->st_msgid_phase15 != v1_MAINMODE_MSGID &&
 		     msgid == st->st_msgid_phase15) ||
 		    msgid == st->st_msgid)
@@ -2311,7 +2247,8 @@ void fmt_state(struct state *st, const monotime_t now,
 					traffic_buf + sizeof(traffic_buf),
 					"! IPCOMPmax=");
 		}
-#ifdef KLIPS
+
+#if defined(NETKEY_SUPPORT) || defined(KLIPS)
 		if (st->st_ah.attrs.encapsulation ==
 			ENCAPSULATION_MODE_TUNNEL ||
 			st->st_esp.attrs.encapsulation ==

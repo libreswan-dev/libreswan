@@ -1,2 +1,0 @@
-IKEv2 mobike responder support without NAT and addresspool.
-Strongswan/north is the initiator and migrates the SA to new IP address.

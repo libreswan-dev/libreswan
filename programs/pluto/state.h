@@ -47,6 +47,8 @@
 #include "labeled_ipsec.h"	/* for struct xfrm_user_sec_ctx_ike and friends */
 #include "list_entry.h"
 #include "retransmit.h"
+#include "ikev2_ts.h"		/* for struct traffic_selector */
+#include "ip_subnet.h"
 
 /* msgid_t defined in defs.h */
 
@@ -245,15 +247,6 @@ struct msg_digest *unsuspend_md(struct state *st);
 		passert(state_is_busy(ST));				\
 	}
 
-/* IKEv2, this struct will be mapped into a ikev2_ts1 payload  */
-struct traffic_selector {
-	uint8_t ts_type;
-	uint8_t ipprotoid;
-	uint16_t startport;
-	uint16_t endport;
-	ip_range net;	/* for now, always happens to be a CIDR */
-};
-
 /*
  * Abstract state machine that drives the parent and child SA.
  *
@@ -266,7 +259,9 @@ struct finite_state {
 	const char *fs_story;
 	lset_t fs_flags;
 	enum event_type fs_timeout_event;
-	const void *fs_microcode;	/* aka edge */
+	const struct state_v1_microcode *fs_v1_transitions;
+	const struct state_v2_microcode *fs_v2_transitions;
+	size_t fs_nr_transitions;
 };
 
 void lswlog_finite_state(struct lswlog *buf, const struct finite_state *fs);
@@ -721,10 +716,6 @@ struct state *find_state_ikev1_init(const uint8_t *icookie, msgid_t msgid);
 extern bool find_pending_phase2(const so_serial_t psn,
 					const struct connection *c,
 					lset_t ok_states);
-
-extern struct state *resp_state_with_msgid(so_serial_t psn, msgid_t st_msgid);
-
-extern struct state *state_with_parent_msgid(so_serial_t psn, msgid_t st_msgid);
 
 extern struct state *find_state_ikev2_parent(const u_char *icookie,
 					     const u_char *rcookie);

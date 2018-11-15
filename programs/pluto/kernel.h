@@ -25,6 +25,7 @@
 #include "monotime.h"
 #include "reqid.h"
 #include "connections.h"	/* for policy_prio_t et.al. */
+#include "ip_said.h"		/* for SA_AH et.al. */
 
 struct sa_marks;
 struct spd_route;
@@ -267,11 +268,6 @@ extern struct raw_iface *find_raw_ifaces6(void);
 extern int fmt_common_shell_out(char *buf, int blen, const struct connection *c,
 				const struct spd_route *sr, struct state *st);
 
-#ifdef KLIPS_MAST
-/* KLIPS/mast/pfkey things */
-extern bool pfkey_plumb_mast_device(int mast_dev);
-#endif
-
 /* many bits reach in to use this, but maybe shouldn't */
 extern bool do_command(const struct connection *c, const struct spd_route *sr,
 		       const char *verb, struct state *st);
@@ -436,9 +432,6 @@ static inline bool compatible_overlapping_connections(const struct connection *a
 
 #ifdef KLIPS
 extern const struct kernel_ops klips_kernel_ops;
-#endif
-#ifdef KLIPS_MAST
-extern const struct kernel_ops mast_kernel_ops;
 #endif
 
 extern void show_kernel_interface(void);

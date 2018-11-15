@@ -1,2 +1,0 @@
-west sends OK cert
-east sends OK cert
