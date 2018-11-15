@@ -10,7 +10,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -22,11 +22,6 @@
 #define _IPSEC_CONFREAD_H_
 
 #include "ipsecconf/keywords.h"
-
-# define DEFAULT_UPDOWN "ipsec _updown"
-
-#include "lset.h"
-#include "err.h"
 
 #ifndef _LIBRESWAN_H
 #include <libreswan.h>
@@ -52,16 +47,15 @@ struct starter_end {
 	enum keyword_host nexttype;
 	ip_address addr, nexthop, sourceip;
 	bool has_client;
-	ip_subnet subnet, vti_ip;
+	ip_subnet subnet;
 	char *iface;
 	char *id;
-	enum keyword_authby authby;
 
 	enum keyword_pubkey rsakey1_type, rsakey2_type;
 	char *rsakey1;
 	char *rsakey2;
-	uint16_t port;
-	uint8_t protocol;
+	u_int16_t port;
+	u_int8_t protocol;
 	bool has_client_wildcard;
 	bool key_from_DNS_on_demand;
 	bool has_port_wildcard;
@@ -90,8 +84,6 @@ struct starter_conn {
 	int_set options_set;
 
 	lset_t policy;
-	lset_t sighash_policy;
-
 	char **alsos;
 
 	struct starter_end left, right;
@@ -110,8 +102,9 @@ struct starter_conn {
 
 	char *esp;
 	char *ike;
-	char *modecfg_dns;
-	char *modecfg_domains;
+	char *modecfg_dns1;
+	char *modecfg_dns2;
+	char *modecfg_domain;
 	char *modecfg_banner;
 	char *policy_label;
 	char *conn_mark_both;
@@ -128,41 +121,29 @@ struct starter_config {
 		knf options;
 		str_set strings_set;
 		int_set options_set;
+
+		/* derived types */
+		char **interfaces;
 	} setup;
 
 	/* conn %default */
 	struct starter_conn conn_default;
 
-	char *ctlsocket;  /* location of pluto control socket */
+	char *ctlbase;  /* location of pluto control socket */
 
 	/* connections list (without %default) */
 	TAILQ_HEAD(, starter_conn) conns;
 };
 
-/*
- * accumulate errors in this struct.
- * This is a string with newlines separating messages.
- * The string is heap-allocated so the caller is responsible
- * for freeing it.
- */
-typedef struct {
-	char *errors;
-} starter_errors_t;
-
-extern void starter_error_append(starter_errors_t *perrl, const char *fmt, ...) PRINTF_LIKE(2);
-
-
-extern struct config_parsed *parser_load_conf(const char *file, starter_errors_t *perr);
-extern void parser_free_conf(struct config_parsed *cfg);
-
 extern struct starter_config *confread_load(const char *file,
-					    starter_errors_t *perrl,
-					    const char *ctlsocket,
+					    err_t *perr,
+					    bool resolvip,
+					    const char *ctlbase,
 					    bool setuponly);
 extern struct starter_conn *alloc_add_conn(struct starter_config *cfg,
 					   const char *name);
-extern void confread_free(struct starter_config *cfg);
+void confread_free(struct starter_config *cfg);
 
-extern void ipsecconf_default_values(struct starter_config *cfg);
+void ipsecconf_default_values(struct starter_config *cfg);
 
 #endif /* _IPSEC_CONFREAD_H_ */

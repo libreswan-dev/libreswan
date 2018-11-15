@@ -12,7 +12,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -35,6 +35,7 @@
 
 #include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
+#include "kameipsec.h"
 
 #include "sysdep.h"
 #include "constants.h"
@@ -56,6 +57,7 @@
 #include "kernel.h"     /* needs connections.h */
 #include "log.h"
 #include "keys.h"
+#include "dnskey.h"     /* needs keys.h and adns.h */
 #include "whack.h"
 #include "alg_info.h"
 #include "spdb.h"
@@ -64,7 +66,6 @@
 #include "plutoalg.h"
 #include "ikev1_xauth.h"
 #include "nat_traversal.h"
-#include "ip_address.h"
 
 #include "virtual.h"	/* needs connections.h */
 
@@ -115,15 +116,27 @@ bool same_peer_ids(const struct connection *c, const struct connection *d,
  * found faster next time.
  */
 struct host_pair *find_host_pair(const ip_address *myaddr,
-				 uint16_t myport,
+				 u_int16_t myport,
 				 const ip_address *hisaddr,
-				 uint16_t hisport)
+				 u_int16_t hisport)
 {
 	struct host_pair *p, *prev;
 
 	/* default hisaddr to an appropriate any */
 	if (hisaddr == NULL) {
+#if 0
+		/* broken */
+		const struct af_info *af = aftoinfo(addrtypeof(myaddr));
+
+		if (af == NULL)
+			af = aftoinfo(AF_INET);
+
+		if (af != NULL)
+			hisaddr = af->any;
+
+#else
 		hisaddr = aftoinfo(addrtypeof(myaddr))->any;
+#endif
 	}
 
 	/*
@@ -143,18 +156,6 @@ struct host_pair *find_host_pair(const ip_address *myaddr,
 		hisport = pluto_port;
 
 	for (prev = NULL, p = host_pairs; p != NULL; prev = p, p = p->next) {
-		if (p->connections != NULL && (p->connections->kind == CK_INSTANCE) &&
-			(p->connections->spd.that.id.kind == ID_NULL))
-		{
-			DBG(DBG_CONTROLMORE, {
-				char ci[CONN_INST_BUF];
-				DBG_log("find_host_pair: ignore CK_INSTANCE with ID_NULL hp:\"%s\"%s",
-					p->connections->name,
-					fmt_conn_instance(p->connections, ci));
-                       });
-                       continue;
-               }
-
 		DBG(DBG_CONTROLMORE, {
 			ipstr_buf b1;
 			ipstr_buf b2;
@@ -180,36 +181,31 @@ struct host_pair *find_host_pair(const ip_address *myaddr,
 	return p;
 }
 
-static void remove_host_pair(struct host_pair *hp)
+void remove_host_pair(struct host_pair *hp)
 {
 	list_rm(struct host_pair, next, hp, host_pairs);
 }
 
 /* find head of list of connections with this pair of hosts */
 struct connection *find_host_pair_connections(const ip_address *myaddr,
-					      uint16_t myport,
+					      u_int16_t myport,
 					      const ip_address *hisaddr,
-					      uint16_t hisport)
+					      u_int16_t hisport)
 {
 	struct host_pair *hp =
 		find_host_pair(myaddr, myport, hisaddr, hisport);
 
-	/*
 	DBG(DBG_CONTROLMORE, {
 		ipstr_buf bm;
 		ipstr_buf bh;
-		char ci[CONN_INST_BUF];
 
-		DBG_log("find_host_pair_conn: %s:%d %s:%d -> hp:%s%s",
+		DBG_log("find_host_pair_conn: %s:%d %s:%d -> hp:%s",
 			ipstr(myaddr, &bm), myport,
 			hisaddr != NULL ? ipstr(hisaddr, &bh) : "%any",
 			hisport,
 			hp != NULL && hp->connections != NULL ?
-				hp->connections->name : "none",
-			hp != NULL && hp->connections != NULL ?
-				fmt_conn_instance(hp->connections, ci) : "");
+				hp->connections->name : "none");
 	    });
-	    */
 
 	return hp == NULL ? NULL : hp->connections;
 }
@@ -301,25 +297,5 @@ void release_dead_interfaces(void)
 				pp = &p->hp_next; /* advance pp */
 			}
 		}
-	}
-}
-
-void delete_oriented_hp(struct connection *c)
-{
-	struct host_pair *hp = c->host_pair;
-
-	list_rm(struct connection, hp_next, c, hp->connections);
-	c->host_pair = NULL; /* redundant, but safe */
-
-	/*
-	 * if there are no more connections with this host_pair
-	 * and we haven't even made an initial contact, let's delete
-	 * this guy in case we were created by an attempted DOS attack.
-	 */
-	if (hp->connections == NULL) {
-		/* ??? must deal with this! */
-		passert(hp->pending == NULL);
-		remove_host_pair(hp);
-		pfree(hp);
 	}
 }

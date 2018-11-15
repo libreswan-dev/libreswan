@@ -13,7 +13,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -382,7 +382,7 @@ void ipsec_print_ip(void *ip)
  *  2) How does this affect syncookies, mss_cache, dst cache ?
  *  3) Path MTU discovery handling needs to be reviewed.  For example,
  *     if we receive an ICMP 'packet too big' message from an intermediate
- *     router specifying its next hop MTU, our stack may process this and
+ *     router specifying it's next hop MTU, our stack may process this and
  *     adjust the MSS without taking our AH/ESP overheads into account.
  */
 
@@ -1125,11 +1125,11 @@ enum ipsec_xmit_value ipsec_xmit_ah(struct ipsec_xmit_state *ixs)
 
 #ifdef CONFIG_KLIPS_ALG
 	if (ixs->ixt_a) {
+
 		if (ixs->ipsp->ips_authalg != AH_SHA && ixs->ipsp->ips_authalg != AH_MD5) {
 			printk("KLIPS AH doesn't support authalg=%d yet\n",ixs->ipsp->ips_authalg);
 			return IPSEC_XMIT_AH_BADALG;
 		}
-
 		if ((buf = kmalloc(sizeof(struct iphdr)+ixs->skb->len, GFP_KERNEL)) == NULL)
 			return IPSEC_XMIT_ERRMEMALLOC;
 
@@ -1369,7 +1369,6 @@ enum ipsec_xmit_value ipsec_xmit_ipcomp(struct ipsec_xmit_state *ixs)
  */
 enum ipsec_xmit_value ipsec_xmit_cont(struct ipsec_xmit_state *ixs)
 {
-	__u8 padlen;
 	skb_set_network_header(ixs->skb,
 			       ipsec_skb_offset(ixs->skb, ixs->skb->data));
 
@@ -1391,9 +1390,8 @@ enum ipsec_xmit_value ipsec_xmit_cont(struct ipsec_xmit_state *ixs)
 		    ixs->sa_len ? ixs->sa_txt : " (error)");
 	KLIPS_IP_PRINT(debug_tunnel & DB_TN_XMIT, ixs->iph);
 
-	padlen = ixs->tailroom - ixs->authlen;
-	ixs->ipsp->ips_life.ipl_bytes.ipl_count += ixs->ilen - padlen;
-	ixs->ipsp->ips_life.ipl_bytes.ipl_last = ixs->ilen - padlen;
+	ixs->ipsp->ips_life.ipl_bytes.ipl_count += ixs->len;
+	ixs->ipsp->ips_life.ipl_bytes.ipl_last = ixs->len;
 
 	if (!ixs->ipsp->ips_life.ipl_usetime.ipl_count)
 		ixs->ipsp->ips_life.ipl_usetime.ipl_count = jiffies / HZ;
@@ -1482,12 +1480,12 @@ static int create_hold_eroute(struct ipsec_xmit_state *ixs)
 	if (lsw_ip_hdr_version(ixs) == 6) {
 		struct in6_addr addr6_any = IN6ADDR_ANY_INIT;
 		hold_said.dst.u.v6.sin6_addr = addr6_any;
-		SET_V6(hold_said.dst);
+		hold_said.dst.u.v6.sin6_family = AF_INET6;
 	} else
 #endif
 	{
 		hold_said.dst.u.v4.sin_addr.s_addr = INADDR_ANY;
-		SET_V4(hold_said.dst);
+		hold_said.dst.u.v4.sin_family = AF_INET;
 	}
 
 	hold_eroute.er_eaddr.sen_len = sizeof(struct sockaddr_encap);
@@ -1764,10 +1762,6 @@ enum ipsec_xmit_value ipsec_xmit_init1(struct ipsec_xmit_state *ixs)
 				memset(&dst, 0, sizeof(dst));
 				src.sin6_family = AF_INET6;
 				dst.sin6_family = AF_INET6;
-#ifdef NEED_SIN_LEN
-				src.sin6_len = sizeof(struct sockaddr_in6);
-				dst.sin6_len = sizeof(struct sockaddr_in6);
-#endif
 				src.sin6_addr = lsw_ip6_hdr(ixs)->saddr;
 				dst.sin6_addr = lsw_ip6_hdr(ixs)->daddr;
 
@@ -1866,6 +1860,7 @@ enum ipsec_xmit_value ipsec_xmit_init1(struct ipsec_xmit_state *ixs)
 				ipsec_xmit_trap_count++;
 
 				if (pfkey_acquire(&ixs->ips) == 0) {
+
 					/* note that we succeeded */
 					ipsec_xmit_trap_sendcount++;
 
@@ -1908,10 +1903,6 @@ enum ipsec_xmit_value ipsec_xmit_init1(struct ipsec_xmit_state *ixs)
 				memset(&dst, 0, sizeof(dst));
 				src.sin_family = AF_INET;
 				dst.sin_family = AF_INET;
-#ifdef NEED_SIN_LEN
-				src.sin_len = sizeof(struct sockaddr_in);
-				dst.sin_len = sizeof(struct sockaddr_in);
-#endif
 				src.sin_addr.s_addr = lsw_ip4_hdr(ixs)->saddr;
 				dst.sin_addr.s_addr = lsw_ip4_hdr(ixs)->daddr;
 
@@ -1978,6 +1969,7 @@ enum ipsec_xmit_value ipsec_xmit_init1(struct ipsec_xmit_state *ixs)
 				ipsec_xmit_trap_count++;
 
 				if (pfkey_acquire(&ixs->ips) == 0) {
+
 					/* note that we succeeded */
 					ipsec_xmit_trap_sendcount++;
 
@@ -2709,7 +2701,7 @@ enum ipsec_xmit_value ipsec_nat_encap(struct ipsec_xmit_state *ixs)
 		/* clear UDP & Non-IKE Markers (if any) */
 		memset(udp, 0, ixs->natt_head);
 
-		/* fill UDP with useful informations ;-) */
+		/* fill UDP with usefull informations ;-) */
 		udp->source = htons(ixs->natt_sport);
 		udp->dest = htons(ixs->natt_dport);
 		udp->len = htons(ntohs(ipp->tot_len) - ixs->iphlen);
@@ -2745,7 +2737,7 @@ static int ipsec_set_dst(struct ipsec_xmit_state *ixs)
 
 # ifdef CONFIG_KLIPS_IPV6
 	if (lsw_ip_hdr_version(ixs) == 6) {
-		/* saddr must not be set with ipv6, otherwise you can't
+		/* saddr must not be set with ipv6, otherwise you can't 
 		 * force the output device with linux kernels >= 4.3.
 		 * (kernel commit d46a9d678e4c9fac1e968d0593e4dba683389324)
 		 */
@@ -2879,8 +2871,9 @@ enum ipsec_xmit_value ipsec_xmit_send(struct ipsec_xmit_state *ixs)
 			ixs->stats->tx_errors++;
 		printk(KERN_WARNING
 		       "klips_error:ipsec_xmit_send: "
-		       "tried to __skb_pull nh-data=%td, %d available.  This should never happen, please report.\n",
-		       skb_network_header(ixs->skb) - ixs->skb->data,
+		       "tried to __skb_pull nh-data=%ld, %d available.  This should never happen, please report.\n",
+		       (unsigned long)(skb_network_header(ixs->skb) -
+				       ixs->skb->data),
 		       ixs->skb->len);
 		return IPSEC_XMIT_PUSHPULLERR;
 	}
@@ -3057,6 +3050,7 @@ void ipsec_xsm(struct ipsec_xmit_state *ixs)
 
 	more_allowed = 1000;
 	while (ixs->state != IPSEC_XSM_DONE && --more_allowed) {
+
 		ixs->next_state = xmit_state_table[ixs->state].next_state;
 
 		stat = xmit_state_table[ixs->state].action(ixs);

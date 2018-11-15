@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -42,6 +42,7 @@
 #include "constants.h"
 #include "lswalloc.h"
 #include "lswlog.h"
+#include "md5.h"
 #include "pem.h"
 
 #include <pk11pub.h>
@@ -54,7 +55,7 @@
  */
 static bool present(const char* pattern, chunk_t* ch)
 {
-	unsigned pattern_len = strlen(pattern);
+	u_int pattern_len = strlen(pattern);
 
 	if (ch->len >= pattern_len &&
 		strneq((char *)ch->ptr, pattern, pattern_len)) {
@@ -135,7 +136,7 @@ static bool extract_token(chunk_t *token, char termination, chunk_t *src)
 
 	/* extract token */
 	token->ptr = src->ptr;
-	token->len = (unsigned)(eot - src->ptr);
+	token->len = (u_int)(eot - src->ptr);
 
 	/* advance src pointer after termination symbol */
 	src->ptr = eot + 1;
@@ -280,4 +281,84 @@ err_t pemtobin(chunk_t *blob)
 		return "file coded in unknown format, discarded";
 
 	return NULL;
+}
+
+void do_3des_nss(u_int8_t *buf, size_t buf_len,
+		PK11SymKey *symkey, u_int8_t *iv, bool enc)
+{
+	u_int8_t *tmp_buf;
+	u_int8_t *new_iv;
+
+	CK_MECHANISM_TYPE ciphermech;
+	SECItem ivitem;
+	SECItem *secparam;
+	PK11Context *enccontext = NULL;
+	SECStatus rv;
+	int outlen;
+
+	DBG(DBG_CRYPT,
+		DBG_log("NSS: do_3des init start"));
+
+	ciphermech = CKM_DES3_CBC;	/* libreswan provides padding */
+
+	if (symkey == NULL) {
+		loglog(RC_LOG_SERIOUS,
+			"do_3des: NSS derived enc key is NULL");
+		abort();
+	}
+
+	ivitem.type = siBuffer;
+	ivitem.data = iv;
+	ivitem.len = DES_CBC_BLOCK_SIZE;
+
+	secparam = PK11_ParamFromIV(ciphermech, &ivitem);
+	if (secparam == NULL) {
+		loglog(RC_LOG_SERIOUS,
+			"do_3des: Failure to set up PKCS11 param (err %d)",
+			PR_GetError());
+		abort();
+	}
+
+	outlen = 0;
+	tmp_buf = PR_Malloc((PRUint32)buf_len);
+	new_iv = (u_int8_t*)PR_Malloc((PRUint32)DES_CBC_BLOCK_SIZE);
+
+	if (!enc)
+		memcpy(new_iv, (char*) buf + buf_len - DES_CBC_BLOCK_SIZE,
+			DES_CBC_BLOCK_SIZE);
+
+	enccontext = PK11_CreateContextBySymKey(ciphermech,
+						enc ? CKA_ENCRYPT :
+						CKA_DECRYPT, symkey,
+						secparam);
+	if (enccontext == NULL) {
+		loglog(RC_LOG_SERIOUS,
+			"do_3des: PKCS11 context creation failure (err %d)",
+			PR_GetError());
+		abort();
+	}
+	rv = PK11_CipherOp(enccontext, tmp_buf, &outlen, buf_len, buf,
+			buf_len);
+	if (rv != SECSuccess) {
+		loglog(RC_LOG_SERIOUS,
+			"do_3des: PKCS11 operation failure (err %d)",
+			PR_GetError());
+		abort();
+	}
+
+	if (enc)
+		memcpy(new_iv, (char*) tmp_buf + buf_len - DES_CBC_BLOCK_SIZE,
+			DES_CBC_BLOCK_SIZE);
+
+	memcpy(buf, tmp_buf, buf_len);
+	memcpy(iv, new_iv, DES_CBC_BLOCK_SIZE);
+	PK11_DestroyContext(enccontext, PR_TRUE);
+	PR_Free(tmp_buf);
+	PR_Free(new_iv);
+
+	if (secparam != NULL)
+		SECITEM_FreeItem(secparam, PR_TRUE);
+
+	DBG(DBG_CRYPT,
+		DBG_log("NSS: do_3des init end"));
 }

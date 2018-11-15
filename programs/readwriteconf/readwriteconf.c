@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -16,28 +16,51 @@
  * for more details.
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <getopt.h>
-#include <stdbool.h>
+#include <asm/types.h>
+#include <sys/types.h>
+#include <sys/ioctl.h>
+/* #include <linux/netdevice.h> */
+#include <net/if.h>
+/* #include <linux/types.h> */ /* new */
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <string.h>
+#include <errno.h>
 
-#include "err.h"
-#include "lswtool.h"
+/* #include <sys/socket.h> */
+
+#include <netinet/in.h>
+#include <arpa/inet.h>
+/* #include <linux/ip.h> */
+#include <netdb.h>
+
+#include <unistd.h>
+#include <getopt.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <stdlib.h>
+#include <libreswan.h>
+
+#include "sysdep.h"
+#include "constants.h"
 #include "lswalloc.h"
 #include "lswconf.h"
 #include "lswlog.h"
 #include "ipsecconf/confread.h"
 #include "ipsecconf/confwrite.h"
-#include "ipsecconf/parser-controls.h"
 #include "ipsecconf/starterlog.h"
+#include "ipsecconf/files.h"
+#include "ipsecconf/starterwhack.h"
+#include "ipsecconf/parser-controls.h"
 
+char *progname;
 static int verbose = 0;
 
 static void usage(void)
 {
 	/* print usage */
-	printf("Usage: %s [--config <file>] [--nosetup] [--debug] [--rootdir <dir>] [--rootdir2 <dir2>] [--conn conn_name]\n",
+	printf("Usage: %s [--config <file>] [--debug] [--rootdir <dir>] [--rootdir2 <dir2>]\n",
 		progname);
 	exit(0);
 }
@@ -46,40 +69,34 @@ static void usage(void)
 static const struct option longopts[] =
 {
 	{ "config",              required_argument, NULL, 'C' },
-	{ "conn",                required_argument, NULL, 'c' },
 	{ "debug",               no_argument, NULL, 'D' },
 	{ "verbose",             no_argument, NULL, 'D' },
 	{ "rootdir",             required_argument, NULL, 'R' },
 	{ "rootdir2",            required_argument, NULL, 'S' },
-	{ "nosetup",             no_argument, NULL, 'n' },
 	{ "help",                no_argument, NULL, 'h' },
 	{ 0, 0, 0, 0 }
 };
 
 int main(int argc, char *argv[])
 {
-	tool_init_log(argv[0]);
-
-	int opt;
+	int opt = 0;
 	struct starter_config *cfg = NULL;
+	err_t err = NULL;
 	char *confdir = NULL;
 	char *configfile = NULL;
 	struct starter_conn *conn = NULL;
-	char *name = NULL;
-	bool setup = true;
 
+	progname = argv[0];
 	rootdir[0] = '\0';
 	rootdir2[0] = '\0';
+
+	tool_init_log();
 
 	while ((opt = getopt_long(argc, argv, "", longopts, 0)) != EOF) {
 		switch (opt) {
 		case 'h':
 			/* usage: */
 			usage();
-			break;
-
-		case 'n':
-			setup = false;
 			break;
 
 		case 'D':
@@ -100,9 +117,6 @@ int main(int argc, char *argv[])
 			printf("#setting rootdir2=%s\n", optarg);
 			jam_str(rootdir2, sizeof(rootdir2), optarg);
 			break;
-		case 'c':
-			name = optarg;
-			break;
 		case '?':
 			exit(5);
 		default:
@@ -112,7 +126,8 @@ int main(int argc, char *argv[])
 	}
 
 	if (optind != argc) {
-		fprintf(stderr, "%s: unexpected arguments\n", progname);
+		fprintf(stderr,"%s: unexpected arguments\n",
+			progname);
 		exit(4);
 	}
 
@@ -140,32 +155,23 @@ int main(int argc, char *argv[])
 	if (verbose)
 		printf("opening file: %s\n", configfile);
 
-	starter_use_log(verbose != 0, true, verbose == 0);
+	starter_use_log(verbose != 0, TRUE, verbose == 0);
 
-	starter_errors_t errl = { NULL };
-	cfg = confread_load(configfile, &errl, NULL, false);
+	cfg = confread_load(configfile, &err, FALSE, NULL, FALSE);
 
 	if (cfg == NULL) {
 		fprintf(stderr, "%s: config file \"%s\" cannot be loaded: %s\n",
-			progname, configfile, errl.errors);
-		pfreeany(errl.errors);
+			progname, configfile, err);
 		exit(3);
-	}
-	if (errl.errors != NULL) {
-		fprintf(stderr, "%s: config file \"%s\", ignoring: %s\n",
-			progname, configfile, errl.errors);
-		pfree(errl.errors);
 	}
 
 	/* load all conns marked as auto=add or better */
-	if (verbose) {
-		for (conn = cfg->conns.tqh_first;
-		     conn != NULL;
-		     conn = conn->link.tqe_next)
-				printf("#conn %s loaded\n", conn->name);
-	}
+	for (conn = cfg->conns.tqh_first;
+	     conn != NULL;
+	     conn = conn->link.tqe_next)
+		printf("#conn %s loaded\n", conn->name);
 
-	confwrite(cfg, stdout, setup, name, verbose);
+	confwrite(cfg, stdout);
 	confread_free(cfg);
 	exit(0);
 }

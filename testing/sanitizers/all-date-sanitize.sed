@@ -4,13 +4,6 @@
 #
 # Someone smarter than me, please turn this into one super regexp
 #
-s/Mon ... .. ..:..:.. 20../TIMESTAMP/g
-s/Tue ... .. ..:..:.. 20../TIMESTAMP/g
-s/Wed ... .. ..:..:.. 20../TIMESTAMP/g
-s/Thu ... .. ..:..:.. 20../TIMESTAMP/g
-s/Fri ... .. ..:..:.. 20../TIMESTAMP/g
-s/Sat ... .. ..:..:.. 20../TIMESTAMP/g
-s/Sun ... .. ..:..:.. 20../TIMESTAMP/g
 s/Jan .. ..:..:.. 20../TIMESTAMP/g
 s/Feb .. ..:..:.. 20../TIMESTAMP/g
 s/Mar .. ..:..:.. 20../TIMESTAMP/g
@@ -24,4 +17,11 @@ s/Sep .. ..:..:.. 20../TIMESTAMP/g
 s/Oct .. ..:..:.. 20../TIMESTAMP/g
 s/Nov .. ..:..:.. 20../TIMESTAMP/g
 s/Dec .. ..:..:.. 20../TIMESTAMP/g
-s/expires in [0-9]* days/expires in X days/g
+#
+s/Mon ... .. ..:..:.. 20../TIMESTAMP/g
+s/Tue ... .. ..:..:.. 20../TIMESTAMP/g
+s/Wed ... .. ..:..:.. 20../TIMESTAMP/g
+s/Thu ... .. ..:..:.. 20../TIMESTAMP/g
+s/Fri ... .. ..:..:.. 20../TIMESTAMP/g
+s/Sat ... .. ..:..:.. 20../TIMESTAMP/g
+s/Sun ... .. ..:..:.. 20../TIMESTAMP/g

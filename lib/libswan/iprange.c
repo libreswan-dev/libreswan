@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -19,76 +19,100 @@
 #include "libswan.h"
 
 /*
- * Calculate the number of significant bits in the size of the range.
- * floor(lg(|high-low| + 1))
+ * this is stupid implementation, see goodmask.c for ideas
+ * on doing it better, but note that this counts zero bits, not
+ * 1 bits, and it doesn't assume that the mask is properly formed.
  *
- * ??? this really should use ip_range rather than a pair of ip_address values
+ * BUG: the function name is clearly a lie.
+ * For example, an all 0 address yields 0, not 32 or 128.
+ * For example, an all 1 address yields 32 or 128, not 0.
  */
-
-int iprange_bits(ip_address low, ip_address high)
+int ikev2_highorder_zerobits(ip_address b)
 {
-	if (addrtypeof(&high) != addrtypeof(&low))
-		return -1;
+	unsigned char *bp;
+	unsigned int i, j;
+	size_t n;
+	int zerobits = 0;
 
-	const unsigned char *hp;
-	size_t n = addrbytesptr_read(&high, &hp);
+	n = addrbytesptr(&b, &bp);
 	if (n == 0)
 		return -1;
 
-	const unsigned char *lp;
-	size_t n2 = addrbytesptr_read(&low, &lp);
+	zerobits = 0;
+	for (j = 0; j < n; j++) {
+		unsigned char mask = 1UL << 7;
+
+		if (*bp) {
+			for (i = 0; i < 8; i++) {
+				if (*bp & mask)
+					return (8 * n) - (zerobits + i);
+
+				mask >>= 1;
+			}
+		}
+		bp++;
+		zerobits += 8;
+	}
+	return 0;
+}
+
+int ikev2_calc_iprangediff(ip_address low, ip_address high)
+{
+	unsigned char *hp;
+	unsigned char *lp, *t;
+	unsigned char *dp;
+	ip_address diff;
+	size_t n;
+	size_t n2;
+	int i;
+	int carry = 0;
+
+	/* initialize all the contents to sensible values */
+	diff = low;
+
+	if (addrtypeof(&high) != addrtypeof(&low))
+		return -1;
+
+	n = addrbytesptr(&high, &hp);
+	if (n == 0)
+		return -1;
+
+	n2 = addrbytesptr(&low, &lp);
 	if (n != n2)
 		return -1;
 
-	ip_address diff = low;	/* initialize all the contents to sensible values */
-	unsigned char *dp;
 	addrbytesptr_write(&diff, &dp);
+	for (i = 0; i < (int)n; i++) {
+		if (hp[i] == lp[i]) {
+			dp[i] = 0;
+			continue;
+		}
+		break;
+	}
 
-	unsigned lastnz = n;
+	/* two values are the same -- no diff */
+	if (i == (int)n)
+		return 0;
 
-	/* subtract: d = h - l */
-	int carry = 0;
-	unsigned j;
-	for (j = n; j > 0; ) {
-		j--;
-		int val = hp[j] - lp[j] - carry;
+	if (hp[i] < lp[i]) {
+		/* need to swap! */
+		t = hp;
+		hp = lp;
+		lp = t;
+	}
+
+	for (i = n - 1; i >= 0; i--) {
+		int val = hp[i] - lp[i] - carry;
 		if (val < 0) {
-			val += 0x100u;
+			val += 256;
 			carry = 1;
 		} else {
 			carry = 0;
 		}
-		dp[j] = val;
-		if (val != 0)
-			lastnz = j;
+		dp[i] = val;
 	}
 
-	/* if the answer was negative, complement it */
-	if (carry != 0) {
-		lastnz = n;	/* redundant, but not obviously so */
-		for (j = n; j > 0; ) {
-			j--;
-			int val = 0xFFu - dp[j] + carry;
-			if (val >= 0x100) {
-				val -= 0x100;
-				carry = 1;	/* redundant, but not obviously so */
-			} else {
-				carry = 0;
-			}
-			dp[j] = val;
-			if (val != 0)
-				lastnz = j;
-		}
-	}
-
-	/* find leftmost bit in dp[lastnz] */
-	unsigned bo = 0;
-	if (lastnz != n) {
-		bo = 0;
-		for (unsigned m = 0x80u; (m & dp[lastnz]) == 0;  m >>=1)
-			bo++;
-	}
-	return (n - lastnz) * 8 - bo;
+	return ikev2_highorder_zerobits(diff);
 }
 
 #ifdef IPRANGE_MAIN
@@ -97,8 +121,6 @@ int iprange_bits(ip_address low, ip_address high)
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-
-#include "constants.h"
 
 void regress(void);
 
@@ -144,7 +166,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	n = iprange_bits(high, low);
+	n = ikev2_calc_iprangediff(high, low);
 
 	addrtot(&high, 0, bh, sizeof(bh));
 	addrtot(&low, 0, bl, sizeof(bl));
@@ -202,7 +224,7 @@ void regress(void)
 			printf("surprise failure converting `%s'\n", r->low);
 			exit(1);
 		}
-		n = iprange_bits(high, low);
+		n = ikev2_calc_iprangediff(high, low);
 		if (n != -1 && r->range == -1) {
 			/* okay, error expected */
 		} else if (n == -1) {

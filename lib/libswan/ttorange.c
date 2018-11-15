@@ -8,7 +8,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -49,7 +49,7 @@ bool non_zero;  /* is 0.0.0.0 allowed? */
 
 	high = dash + 1;
 	hlen = srclen - (high - src);
-	oops = ttoaddr_num(src, dash - src, af, &addr_start_tmp);
+	oops = ttoaddr(src, dash - src, af, &addr_start_tmp);
 	if (oops != NULL)
 		return oops;
 
@@ -59,7 +59,7 @@ bool non_zero;  /* is 0.0.0.0 allowed? */
 	 */
 
 	/* extract end ip address */
-	oops = ttoaddr_num(high, hlen, af, &addr_end_tmp);
+	oops = ttoaddr(high, hlen, af, &addr_end_tmp);
 	if (oops != NULL)
 		return oops;
 
@@ -116,8 +116,8 @@ int main(int argc, char *argv[])
 	const char *oops;
 	int af;
 	char *p;
-	uint32_t pool_size;
-	uint32_t pool_size1;
+	u_int32_t pool_size;
+	u_int32_t pool_size1;
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s range\n", argv[0]);
@@ -139,8 +139,8 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	pool_size = (uint32_t)ntohl(r.end.u.v4.sin_addr.s_addr) -
-		(uint32_t)ntohl(r.start.u.v4.sin_addr.s_addr);
+	pool_size = (u_int32_t)ntohl(r.end.u.v4.sin_addr.s_addr) -
+		(u_int32_t)ntohl(r.start.u.v4.sin_addr.s_addr);
 	pool_size++;
 
 	addrtot(&r.start, 0, buf1, sizeof(buf1));
@@ -153,8 +153,8 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	pool_size1 = (uint32_t)ntohl(r1.end.u.v4.sin_addr.s_addr) -
-		(uint32_t)ntohl(r1.start.u.v4.sin_addr.s_addr);
+	pool_size1 = (u_int32_t)ntohl(r1.end.u.v4.sin_addr.s_addr) -
+		(u_int32_t)ntohl(r1.start.u.v4.sin_addr.s_addr);
 	pool_size1++;
 	if (pool_size != pool_size1) {
 		fprintf(stderr,
@@ -193,7 +193,7 @@ void regress(void)
 	char in[100];
 	char buf[100];
 	char buf1[100];
-	uint32_t pool_size;
+	u_int32_t pool_size;
 	const char *oops;
 	size_t n;
 	int af;
@@ -212,8 +212,8 @@ void regress(void)
 			status = 1;
 		}
 
-		pool_size = (uint32_t)ntohl(s.end.u.v4.sin_addr.s_addr) -
-			(uint32_t)ntohl(s.start.u.v4.sin_addr.s_addr);
+		pool_size = (u_int32_t)ntohl(s.end.u.v4.sin_addr.s_addr) -
+			(u_int32_t)ntohl(s.start.u.v4.sin_addr.s_addr);
 		pool_size++;
 		snprintf(buf1, sizeof(buf1), "%u", pool_size);
 

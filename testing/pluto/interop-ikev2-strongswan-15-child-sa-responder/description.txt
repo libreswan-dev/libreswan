@@ -1,3 +1,0 @@
-Interop with strongswan using two connections that share the same Parent SA.
-
-Libreswan, west, initiate to east, strongswan.

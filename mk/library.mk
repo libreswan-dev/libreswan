@@ -8,7 +8,14 @@ include $(top_srcdir)/mk/config.mk
 include $(top_srcdir)/mk/version.mk
 include $(top_srcdir)/mk/targets.mk
 
-INCLUDES+=-I${KLIPSINC}
+KLIPSD=${LIBRESWANSRCDIR}/linux/include
+KLIPSSRCDIR=${LIBRESWANSRCDIR}/linux/net/ipsec
+
+VPATH+= ${KLIPSSRCDIR}
+OSDEP?=$(shell uname -s | tr 'A-Z' 'a-z')
+
+# Original flags
+INCLUDES+=-I. -I${KLIPSSRCDIR} -I${KLIPSD} -I${LIBRESWANSRCDIR}
 INCLUDES+=-I${LIBRESWANSRCDIR}/include
 # nss
 INCLUDES+=${NSSFLAGS}
@@ -25,21 +32,16 @@ ARFLAGS=crvs
 local-base: $(LIB)
 
 local-clean-base:
-	rm -f $(builddir)/*.o
-	rm -f $(builddir)/*.a
-	rm -f $(builddir)/*.c
+	rm -f $(foreach f,$(OBJS) $(LIB), $(builddir)/$(f))
 
 list-local-base:
 	@: never nothing to do
 
-# So that removing something from $(OBJS) triggers an archive build:
-# depend on Makefile; and always build a new archive.  Could also
-# depend the mk/* directory?
+$(LIB): $(OBJS)
+	cd $(builddir) ; $(AR) $(ARFLAGS) $(LIB) $(OBJS)
 
-$(LIB): $(OBJS) $(srcdir)/Makefile | $(builddir)
-	rm -f $(builddir)/$(LIB).tmp
-	cd $(builddir) && $(AR) $(ARFLAGS) $(LIB).tmp $(OBJS)
-	mv $(builddir)/$(LIB).tmp $(builddir)/$(LIB)
+$(OBJS):	$(HDRS)
 
+MK_DEPEND_FILES = $(OBJS)
+MK_DEPEND_CFLAGS = $(CFLAGS)
 include $(top_srcdir)/mk/depend.mk
-include $(top_srcdir)/mk/builddir.mk

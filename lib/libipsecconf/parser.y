@@ -1,5 +1,5 @@
 %{   /* -*- bison-mode -*- */
-/* Libreswan config file parser (parser.y)
+/* FreeS/WAN config file parser (parser.y)
  * Copyright (C) 2001 Mathieu Lafon - Arkoon Network Security
  * Copyright (C) 2004 Michael Richardson <mcr@sandelman.ottawa.on.ca>
  * Copyright (C) 2013 Paul Wouters <pwouters@redhat.com>
@@ -10,7 +10,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -156,9 +156,6 @@ statement_kw:
 		case kt_list:
 			number = parser_enum_list(kw.keydef, value, TRUE);
 			break;
-		case kt_lset:
-			number = parser_lset(kw.keydef, value);	/* XXX: truncates! */
-			break;
 		case kt_enum:
 			number = parser_enum_list(kw.keydef, value, FALSE);
 			break;
@@ -219,9 +216,6 @@ statement_kw:
 		switch (kw.keydef->type) {
 		case kt_list:
 			number = parser_enum_list(kw.keydef, $3, TRUE);
-			break;
-		case kt_lset:
-			number = parser_lset(kw.keydef, $3); /* XXX: truncates! */
 			break;
 		case kt_enum:
 			number = parser_enum_list(kw.keydef, $3, FALSE);
@@ -361,9 +355,11 @@ void yyerror(const char *s)
 		parser_y_error(parser_errstring, ERRSTRING_LEN, s);
 }
 
-struct config_parsed *parser_load_conf(const char *file, starter_errors_t *perrl)
+struct config_parsed *parser_load_conf(const char *file, err_t *perr)
 {
 	parser_errstring[0] = '\0';
+	if (perr != NULL)
+		*perr = NULL;
 
 	struct config_parsed *cfg = malloc(sizeof(struct config_parsed));
 
@@ -371,9 +367,7 @@ struct config_parsed *parser_load_conf(const char *file, starter_errors_t *perrl
 		snprintf(parser_errstring, ERRSTRING_LEN, "can't allocate memory");
 		goto err;
 	}
-
-	static const struct config_parsed empty_config_parsed;	/* zero or null everywhere */
-	*cfg = empty_config_parsed;
+	zero(cfg);	/* ??? pointer fields may not be NULLed */
 
 	FILE *f = streq(file, "-") ?
 		fdopen(STDIN_FILENO, "r") : fopen(file, "r");
@@ -398,28 +392,17 @@ struct config_parsed *parser_load_conf(const char *file, starter_errors_t *perrl
 		}
 		save_errors = FALSE;
 		do {} while (yyparse() != 0);
-		goto err;
+	} else if (parser_errstring[0] == '\0') {
+		/**
+		 * Config valid
+		 */
+		return cfg;
 	}
-
-	/* check all are kv_config */
-	for (const struct kw_list *kw = parser_cfg->config_setup;
-	     kw != NULL; kw = kw->next) {
-		if (!(kw->keyword.keydef->validity & kv_config)) {
-			snprintf(parser_errstring, sizeof(parser_errstring),
-				 "unexpected keyword '%s' in section 'config setup'",
-				 kw->keyword.keydef->keyname);
-			goto err;
-		}
-	}
-
-	/**
-	 * Config valid
-	 */
-	return cfg;
+	/* falls through on error */
 
 err:
-	starter_error_append(perrl, "%s", parser_errstring);
-
+	if (perr != NULL)
+		*perr = (err_t)strdup(parser_errstring);
 	if (cfg != NULL)
 		parser_free_conf(cfg);
 

@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -63,13 +63,11 @@ static bool pack_str(struct whackpacker *wp, char **p)
 }
 
 /**
- * Unpack the next string from a whack message
+ * Unpack a whack message into a string
  *
  * @param wp Whack Message
- * @param p pointer to a string pointer; the string pointer will point to the next string in *wp.
- * @return bool TRUE if operation successful
- *
- * Note that the string still resides in the whach message.
+ * @param p a string into which you want the message to be placed into
+ * @return bool True if operation successful
  */
 static bool unpack_str(struct whackpacker *wp, char **p)
 {
@@ -96,64 +94,62 @@ static bool unpack_str(struct whackpacker *wp, char **p)
  */
 err_t pack_whack_msg(struct whackpacker *wp)
 {
-	/* Pack strings */
+	err_t ugh = NULL;
 
+	/**
+	 * Pack strings
+	 */
 	wp->str_next = wp->msg->string;
 	wp->str_roof = &wp->msg->string[sizeof(wp->msg->string)];
 
-	if (!pack_str(wp, &wp->msg->name) ||			/* string 1 */
-	    !pack_str(wp, &wp->msg->left.id) ||			/* string 2 */
-	    !pack_str(wp, &wp->msg->left.pubkey) ||		/* string 3 */
-	    !pack_str(wp, &wp->msg->left.ca) ||			/* string 4 */
-	    !pack_str(wp, &wp->msg->left.groups) ||		/* string 5 */
-	    !pack_str(wp, &wp->msg->left.updown) ||		/* string 6 */
-	    !pack_str(wp, &wp->msg->left.virt) ||		/* string 7 */
-	    !pack_str(wp, &wp->msg->right.id) ||		/* string 8 */
-	    !pack_str(wp, &wp->msg->right.pubkey) ||		/* string 9 */
-	    !pack_str(wp, &wp->msg->right.ca) ||		/* string 10 */
-	    !pack_str(wp, &wp->msg->right.groups) ||		/* string 11 */
-	    !pack_str(wp, &wp->msg->right.updown) ||		/* string 12 */
-	    !pack_str(wp, &wp->msg->right.virt) ||		/* string 13 */
-	    !pack_str(wp, &wp->msg->keyid) ||			/* string 14 */
-
-	    !pack_str(wp, &wp->msg->ike) ||			/* string 16 */
-	    !pack_str(wp, &wp->msg->esp) ||			/* string 17 */
-	    !pack_str(wp, &wp->msg->left.xauth_username) ||	/* string 18 */
-	    !pack_str(wp, &wp->msg->right.xauth_username) ||	/* string 19 */
-	    !pack_str(wp, &wp->msg->connalias) ||		/* string 20 */
-	    !pack_str(wp, &wp->msg->left.host_addr_name) ||	/* string 21 */
-	    !pack_str(wp, &wp->msg->right.host_addr_name) ||	/* string 22 */
-	    !pack_str(wp, &wp->msg->string1) ||			/* string 23 */
-	    !pack_str(wp, &wp->msg->string2) ||			/* string 24 */
-	    !pack_str(wp, &wp->msg->string3) ||			/* string 25 */
-	    !pack_str(wp, &wp->msg->dnshostname) ||		/* string 26 */
+	if (!pack_str(wp, &wp->msg->name) ||                                    /* string 1 */
+	    !pack_str(wp, &wp->msg->left.id) ||                                 /* string 2 */
+	    !pack_str(wp, &wp->msg->left.pubkey) ||                             /* string 3 */
+	    !pack_str(wp, &wp->msg->left.ca) ||                                 /* string 4 */
+	    !pack_str(wp, &wp->msg->left.groups) ||                             /* string 5 */
+	    !pack_str(wp, &wp->msg->left.updown) ||                             /* string 6 */
+	    !pack_str(wp, &wp->msg->left.virt) ||                               /* string 7 */
+	    !pack_str(wp, &wp->msg->right.id) ||                                /* string 8 */
+	    !pack_str(wp, &wp->msg->right.pubkey) ||                            /* string 9 */
+	    !pack_str(wp, &wp->msg->right.ca) ||                                /* string 10 */
+	    !pack_str(wp, &wp->msg->right.groups) ||                            /* string 11 */
+	    !pack_str(wp, &wp->msg->right.updown) ||                            /* string 12 */
+	    !pack_str(wp, &wp->msg->right.virt) ||                              /* string 13 */
+	    !pack_str(wp, &wp->msg->keyid) ||                                   /* string 14 */
+	    !pack_str(wp, &wp->msg->myid) ||                                    /* string 15 */
+	    !pack_str(wp, &wp->msg->ike) ||                                     /* string 16 */
+	    !pack_str(wp, &wp->msg->esp) ||                                     /* string 17 */
+	    !pack_str(wp, &wp->msg->left.username) ||                           /* string 18 */
+	    !pack_str(wp, &wp->msg->right.username) ||                          /* string 19 */
+	    !pack_str(wp, &wp->msg->connalias) ||                               /* string 20 */
+	    !pack_str(wp, &wp->msg->left.host_addr_name) ||                     /* string 21 */
+	    !pack_str(wp, &wp->msg->right.host_addr_name) ||                    /* string 22 */
+	    !pack_str(wp, &wp->msg->string1) ||                                 /* string 23 */
+	    !pack_str(wp, &wp->msg->string2) ||                                 /* string 24 */
+	    !pack_str(wp, &wp->msg->string3) ||                                 /* string 25 */
+	    !pack_str(wp, &wp->msg->dnshostname) ||                             /* string 26 */
 #ifdef HAVE_LABELED_IPSEC
-	    !pack_str(wp, &wp->msg->policy_label) ||		/* string 27 */
+	    !pack_str(wp, &wp->msg->policy_label) ||                            /* string 27 */
 #endif
-	    !pack_str(wp, &wp->msg->modecfg_dns) ||		/* string 28 */
-	    !pack_str(wp, &wp->msg->modecfg_domains) ||		/* string 28 */
-	    !pack_str(wp, &wp->msg->modecfg_banner) ||		/* string 29 */
-	    !pack_str(wp, &wp->msg->conn_mark_both) ||		/* string 30 */
-	    !pack_str(wp, &wp->msg->conn_mark_in) ||		/* string 31 */
-	    !pack_str(wp, &wp->msg->conn_mark_out) ||		/* string 32 */
-	    !pack_str(wp, &wp->msg->vti_iface) ||		/* string 33 */
-	    !pack_str(wp, &wp->msg->remote_host) ||		/* string 33 */
-	    wp->str_roof - wp->str_next < (ptrdiff_t)wp->msg->keyval.len)	/* key */
-	{
-		return "too many bytes of strings or key to fit in message to pluto";
+	    !pack_str(wp, &wp->msg->modecfg_domain) ||                          /* string 28 */
+	    !pack_str(wp, &wp->msg->modecfg_banner) ||                          /* string 29 */
+	    !pack_str(wp, &wp->msg->conn_mark_both) ||                          /* string 30 */
+	    !pack_str(wp, &wp->msg->conn_mark_in) ||                            /* string 31 */
+	    !pack_str(wp, &wp->msg->conn_mark_out) ||                           /* string 32 */
+	    !pack_str(wp, &wp->msg->vti_iface) ||                               /* string 33 */
+	    wp->str_roof - wp->str_next < (ptrdiff_t)wp->msg->keyval.len) {  /* chunk (sort of string) */
+		ugh = "too many bytes of strings to fit in message to pluto";
+		return ugh;
 	}
 
-	/*
-	 * Like pack_str, but for the keyval chunk.
-	 * - already checked that there is room for the chunk
-	 * - memcpy wants valid pointers, even if the length is 0.
-	 */
-	if (wp->msg->keyval.len != 0)
+	if (wp->msg->keyval.ptr)
 		memcpy(wp->str_next, wp->msg->keyval.ptr, wp->msg->keyval.len);
-	wp->msg->keyval.ptr = NULL;	/* don't send pointers on the wire! */
+
+
+	wp->msg->keyval.ptr = NULL;
 	wp->str_next += wp->msg->keyval.len;
 
-	return NULL;
+	return ugh;
 }
 
 /**
@@ -170,49 +166,44 @@ err_t unpack_whack_msg(struct whackpacker *wp)
 		ugh = builddiag(
 			"ignoring truncated message from whack: got %d bytes; expected %u",
 			(int) wp->n, (unsigned) sizeof(wp->msg));
-	} else if (!unpack_str(wp, &wp->msg->name) ||			/* string 1 */
-	    !unpack_str(wp, &wp->msg->left.id) ||		/* string 2 */
-	    !unpack_str(wp, &wp->msg->left.pubkey) ||		/* string 3 */
-	    !unpack_str(wp, &wp->msg->left.ca) ||		/* string 4 */
-	    !unpack_str(wp, &wp->msg->left.groups) ||		/* string 5 */
-	    !unpack_str(wp, &wp->msg->left.updown) ||		/* string 6 */
-	    !unpack_str(wp, &wp->msg->left.virt) ||		/* string 7 */
-	    !unpack_str(wp, &wp->msg->right.id) ||		/* string 8 */
-	    !unpack_str(wp, &wp->msg->right.pubkey) ||		/* string 9 */
-	    !unpack_str(wp, &wp->msg->right.ca) ||		/* string 10 */
-	    !unpack_str(wp, &wp->msg->right.groups) ||		/* string 11 */
-	    !unpack_str(wp, &wp->msg->right.updown) ||		/* string 12 */
-	    !unpack_str(wp, &wp->msg->right.virt) ||		/* string 13 */
-	    !unpack_str(wp, &wp->msg->keyid) ||			/* string 14 */
-
-	    !unpack_str(wp, &wp->msg->ike) ||			/* string 16 */
-	    !unpack_str(wp, &wp->msg->esp) ||			/* string 17 */
-	    !unpack_str(wp, &wp->msg->left.xauth_username) ||	/* string 18 */
-	    !unpack_str(wp, &wp->msg->right.xauth_username) ||	/* string 19 */
-	    !unpack_str(wp, &wp->msg->connalias) ||		/* string 20 */
-	    !unpack_str(wp, &wp->msg->left.host_addr_name) ||	/* string 21 */
-	    !unpack_str(wp, &wp->msg->right.host_addr_name) ||	/* string 22 */
-	    !unpack_str(wp, &wp->msg->string1) ||		/* string 23 */
-	    !unpack_str(wp, &wp->msg->string2) ||		/* string 24 */
-	    !unpack_str(wp, &wp->msg->string3) ||		/* string 25 */
-	    !unpack_str(wp, &wp->msg->dnshostname) ||		/* string 26 */
-#ifdef HAVE_LABELED_IPSEC
-	    !unpack_str(wp, &wp->msg->policy_label) ||		/* string 27 */
-#endif
-	    !unpack_str(wp, &wp->msg->modecfg_dns) ||		/* string 28 */
-	    !unpack_str(wp, &wp->msg->modecfg_domains) ||	/* string 28 */
-	    !unpack_str(wp, &wp->msg->modecfg_banner) ||	/* string 29 */
-	    !unpack_str(wp, &wp->msg->conn_mark_both) ||	/* string 30 */
-	    !unpack_str(wp, &wp->msg->conn_mark_in) ||		/* string 31 */
-	    !unpack_str(wp, &wp->msg->conn_mark_out) ||		/* string 32 */
-	    !unpack_str(wp, &wp->msg->vti_iface) ||		/* string 33 */
-	    !unpack_str(wp, &wp->msg->remote_host) ||		/* string 33 */
-	    wp->str_roof - wp->str_next != (ptrdiff_t)wp->msg->keyval.len)
-	{
-		ugh = "message from whack contains bad string or key";
-	} else {
-		wp->msg->keyval.ptr = wp->str_next;
 	}
+	if (!unpack_str(wp, &wp->msg->name) ||                  /* string 1 */
+	    !unpack_str(wp, &wp->msg->left.id) ||               /* string 2 */
+	    !unpack_str(wp, &wp->msg->left.pubkey) ||           /* string 3 */
+	    !unpack_str(wp, &wp->msg->left.ca) ||               /* string 4 */
+	    !unpack_str(wp, &wp->msg->left.groups) ||           /* string 5 */
+	    !unpack_str(wp, &wp->msg->left.updown) ||           /* string 6 */
+	    !unpack_str(wp, &wp->msg->left.virt) ||             /* string 7 */
+	    !unpack_str(wp, &wp->msg->right.id) ||              /* string 8 */
+	    !unpack_str(wp, &wp->msg->right.pubkey) ||          /* string 9 */
+	    !unpack_str(wp, &wp->msg->right.ca) ||              /* string 10 */
+	    !unpack_str(wp, &wp->msg->right.groups) ||          /* string 11 */
+	    !unpack_str(wp, &wp->msg->right.updown) ||          /* string 12 */
+	    !unpack_str(wp, &wp->msg->right.virt) ||            /* string 13 */
+	    !unpack_str(wp, &wp->msg->keyid) ||                 /* string 14 */
+	    !unpack_str(wp, &wp->msg->myid) ||                  /* string 15 */
+	    !unpack_str(wp, &wp->msg->ike) ||                   /* string 16 */
+	    !unpack_str(wp, &wp->msg->esp) ||                   /* string 17 */
+	    !unpack_str(wp, &wp->msg->left.username) ||       /* string 18 */
+	    !unpack_str(wp, &wp->msg->right.username) ||      /* string 19 */
+	    !unpack_str(wp, &wp->msg->connalias) ||             /* string 20 */
+	    !unpack_str(wp, &wp->msg->left.host_addr_name) ||   /* string 21 */
+	    !unpack_str(wp, &wp->msg->right.host_addr_name) ||  /* string 22 */
+	    !unpack_str(wp, &wp->msg->string1) ||               /* string 23 */
+	    !unpack_str(wp, &wp->msg->string2) ||               /* string 24 */
+	    !unpack_str(wp, &wp->msg->string3) ||               /* string 25 */
+	    !unpack_str(wp, &wp->msg->dnshostname) ||           /* string 26 */
+#ifdef HAVE_LABELED_IPSEC
+	    !unpack_str(wp, &wp->msg->policy_label) ||          /* string 27 */
+#endif
+	    !unpack_str(wp, &wp->msg->modecfg_domain) ||        /* string 28 */
+	    !unpack_str(wp, &wp->msg->modecfg_banner) ||        /* string 29 */
+	    !unpack_str(wp, &wp->msg->conn_mark_both) ||        /* string 30 */
+	    !unpack_str(wp, &wp->msg->conn_mark_in) ||          /* string 31 */
+	    !unpack_str(wp, &wp->msg->conn_mark_out) ||         /* string 32 */
+	    !unpack_str(wp, &wp->msg->vti_iface) ||             /* string 33 */
+	    wp->str_roof - wp->str_next != (ptrdiff_t)wp->msg->keyval.len)
+		ugh = "message from whack contains bad string";
 
 	return ugh;
 }
@@ -264,21 +255,22 @@ int whack_get_value(char *buf, size_t bufsize)
 	return len;
 }
 
-/* Get password from user.  Truncate it to fit in buf. */
-/* ??? the function getpass(3) is obsolete! */
+/* ??? bufsize must be PASS_MAX + 1 (documented in getpass(3)) */
 size_t whack_get_secret(char *buf, size_t bufsize)
 {
+	const char *secret;
+	int len;
+
 	fflush(stdout);
-	assert(bufsize > 0);	/* room for terminal NUL */
+	/* ??? the function getpass(3) is obsolete! */
+	secret = getpass("Enter passphrase: ");
+	secret = (secret == NULL) ? "" : secret;
 
-	char *secret = getpass("Enter passphrase: ");
-	/* jam_str would be good but it requires too much library */
-	size_t len = strlen(secret) + 1;
-	size_t trunc_len = len <= bufsize ? len : bufsize;
+	strncpy(buf, secret, bufsize-1);
+	buf[bufsize-1] = '\n';	/* ensure NUL termination */
 
-	memcpy(buf, secret, trunc_len);
-	buf[trunc_len-1] = '\0';	/* force NUL termination */
-	memset(secret, 0, len);	/* scrub secret from RAM */
-	return trunc_len;
+	len = strlen(buf) + 1;
+
+	return len;
 }
 

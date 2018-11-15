@@ -1,17 +1,13 @@
 /*
  * identity representation, as in IKE ID Payloads (RFC 2407 DOI 4.6.2.1)
  *
- * Copyright (C) 1999-2001,2013-2017  D. Hugh Redelmeier
- * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2013-2017 Antony Antony <antony@phenome.org>
- * Copyright (C) 2013-2015 Matt Rogers, <mrogers@libreswan.org>
- * Copyright (C) 2013 Florian Weimer <fweimer@redhat.com>
- * Copyright (C) 2015 Valeriu Goldberger <vgoldberger@ventusnetworks.com>
+ * Copyright (C) 1999-2001  D. Hugh Redelmeier
+ * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -26,6 +22,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
+#ifndef HOST_NAME_MAX	/* POSIX 1003.1-2001 says <unistd.h> defines this */
+#define HOST_NAME_MAX 255	/* upper bound, according to SUSv2 */
+#endif
 
 #include <libreswan.h>
 
@@ -34,9 +34,9 @@
 #include "libreswan/passert.h"
 #include "lswalloc.h"
 #include "lswlog.h"
-#include "sysdep.h"
 #include "id.h"
 #include "x509.h"
+#include "nss_copies.h"
 #include <cert.h>
 #include "certs.h"
 
@@ -66,13 +66,15 @@ unsigned char *temporary_cyclic_buffer(void)
  * This function should be split into parts so the boolean arguments can be
  * removed -- Paul
  */
-err_t atoid(char *src, struct id *id, bool oe_only)
+err_t atoid(char *src, struct id *id, bool myid_ok, bool oe_only)
 {
 	err_t ugh = NULL;
 
 	*id = empty_id;
 
-	if (!oe_only && streq("%fromcert", src)) {
+	if (!oe_only && myid_ok && streq("%myid", src)) {
+		id->kind = ID_MYID;
+	} else if (!oe_only && streq("%fromcert", src)) {
 		id->kind = ID_FROMCERT;
 	} else if (!oe_only && streq("%none", src)) {
 		id->kind = ID_NONE;
@@ -184,11 +186,32 @@ static int keyidtoa(char *dst, size_t dstlen, chunk_t keyid)
 	return ((n < (int)dstlen) ? n : (int)dstlen) - 1;
 }
 
+void iptoid(const ip_address *ip, struct id *id)
+{
+	*id = empty_id;
+
+	switch (addrtypeof(ip)) {
+	case AF_INET:
+		id->kind = ID_IPV4_ADDR;
+		break;
+	case AF_INET6:
+		id->kind = ID_IPV6_ADDR;
+		break;
+	default:
+		bad_case(addrtypeof(ip));
+	}
+	id->ip_addr = *ip;
+}
+
 int idtoa(const struct id *id, char *dst, size_t dstlen)
 {
 	int n;
 
+	id = resolve_myid(id);
 	switch (id->kind) {
+	case ID_MYID:
+		n = snprintf(dst, dstlen, "%s", "%myid");
+		break;
 	case ID_FROMCERT:
 		n = snprintf(dst, dstlen, "%s", "%fromcert");
 		break;
@@ -277,6 +300,35 @@ void escape_metachar(const char *src, char *dst, size_t dstlen)
 }
 
 /*
+ * Remove all shell metacharacters ', \, ", `, and $ in a character string
+ */
+void remove_metachar(const char *src, char *dst, size_t dstlen)
+{
+	bool changed = FALSE;
+
+	passert(dstlen >= 1);
+	while (*src != '\0' && dstlen > 1) {
+		if ((*src >= '0' && *src <= '9') ||
+			(*src >= 'a' && *src <= 'z') ||
+			(*src >= 'A' && *src <= 'Z') ||
+			*src == '_' || *src == '-' ||
+			*src == '.') {
+			*dst++ = *src;
+			dstlen--;
+		} else {
+			changed = TRUE;
+		}
+		src++;
+	}
+	*dst = '\0';
+	if (changed) {
+		libreswan_log(
+			"Warning: XAUTH username changed from '%s' to '%s'",
+			src, dst);
+	}
+}
+
+/*
  * Make private copy of string in struct id.
  * This is needed if the result of atoid is to be kept.
  */
@@ -291,6 +343,7 @@ void unshare_id_content(struct id *id)
 					"keep id name");
 		/* Somehow assert we have a valid id here? */
 		break;
+	case ID_MYID:
 	case ID_FROMCERT:
 	case ID_NONE:
 	case ID_NULL:
@@ -311,6 +364,7 @@ void free_id_content(struct id *id)
 	case ID_KEY_ID:
 		freeanychunk(id->name);
 		break;
+	case ID_MYID:
 	case ID_FROMCERT:
 	case ID_NONE:
 	case ID_NULL:
@@ -325,6 +379,8 @@ void free_id_content(struct id *id)
 /* is this a "match anything" id */
 bool any_id(const struct id *a)
 {
+	a = resolve_myid(a);
+
 	switch (a->kind) {
 	case ID_NONE:
 		return TRUE; /* wildcard */
@@ -347,9 +403,17 @@ bool any_id(const struct id *a)
 	}
 }
 
+int id_kind(const struct id *id)
+{
+	return id->kind;
+}
+
 /* compare two struct id values */
 bool same_id(const struct id *a, const struct id *b)
 {
+	a = resolve_myid(a);
+	b = resolve_myid(b);
+
 	if (b->kind == ID_NONE || a->kind == ID_NONE) {
 		DBG(DBG_PARSING, DBG_log("id type with ID_NONE means wildcard match"));
 		return TRUE; /* it's the wildcard */
@@ -386,7 +450,6 @@ bool same_id(const struct id *a, const struct id *b)
 		size_t al = a->name.len,
 			bl = b->name.len;
 
-		/* strip trailing dots */
 		while (al > 0 && a->name.ptr[al - 1] == '.')
 			al--;
 		while (bl > 0 && b->name.ptr[bl - 1] == '.')
@@ -395,6 +458,7 @@ bool same_id(const struct id *a, const struct id *b)
 			strncaseeq((char *)a->name.ptr,
 				(char *)b->name.ptr, al);
 	}
+
 	case ID_FROMCERT:
 		DBG(DBG_CONTROL,
 			DBG_log("same_id() received ID_FROMCERT - unexpected"));
@@ -414,9 +478,6 @@ bool same_id(const struct id *a, const struct id *b)
 }
 
 /* compare two struct id values, DNs can contain wildcards */
-
-static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards);	/* forward */
-
 bool match_id(const struct id *a, const struct id *b, int *wildcards)
 {
 	bool match;
@@ -517,7 +578,7 @@ static bool match_rdn(const CERTRDN *const rdn_a, const CERTRDN *const rdn_b, bo
 					}
 					SECITEM_FreeItem(val_b, PR_TRUE);
 				}
-				if (CERT_CompareAVA(ava_a, ava_b) == SECEqual) {
+				if (NSSCERT_CompareAVA(ava_a, ava_b) == SECEqual) {
 					matched++;
 					break;
 				}
@@ -598,7 +659,7 @@ bool same_dn_any_order(chunk_t a, chunk_t b)
 	return ret;
 }
 
-static bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
+bool match_dn_any_order_wild(chunk_t a, chunk_t b, int *wildcards)
 {
 	bool ret = match_dn(a, b, wildcards);
 

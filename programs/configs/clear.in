@@ -1,14 +1,19 @@
-# This file defines the set of network destinations for which
-# communication should always be in the clear.
+# This file defines the set of CIDRs (network/mask-length) to which
+# communication should always be in the clear. One IPv4 or IPv6 CIDR per line.
 #
-# One IPv4 or IPv6 CIDR per line, optionally specifying a further
-# narrowing of protocol, source port and destination port
-#
-# examples:
-# 10.0.1.0/24
-# 2a03:6000:1004:1::/64
-#
-# dont IPsec encrypt ssh to a range
-#  10.0.1.0/24  tcp  0  22
-# don't IPsec encrypt any incoming ssh
-#  0.0.0.0/0  tcp  22  0
+# If running a recursive DNS server with query minimalization, one could
+# opt to always send DNS root server traffic in the clear to speedup
+# starting with an empty cache. It is not required though.
+# 198.41.0.4/32
+# 192.228.79.201/32
+# 192.33.4.12/32
+# 199.7.91.13/32
+# 192.203.230.10/32
+# 192.5.5.241/32
+# 192.112.36.4/32
+# 198.97.190.53/32
+# 192.36.148.17/32
+# 192.58.128.30/32
+# 193.0.14.129/32
+# 199.7.83.42/32
+# 202.12.27.33/32

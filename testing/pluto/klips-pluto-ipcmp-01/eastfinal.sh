@@ -1,2 +1,2 @@
-../../pluto/bin/ipsec-look.sh
+ipsec look
 : ==== end ====

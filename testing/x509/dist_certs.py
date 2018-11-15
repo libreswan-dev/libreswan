@@ -8,7 +8,7 @@
  This program is free software; you can redistribute it and/or modify it
  under the terms of the GNU General Public License as published by the
  Free Software Foundation; either version 2 of the License, or (at your
- option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 
  This program is distributed in the hope that it will be useful, but
  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -43,7 +43,7 @@ top_caname=""
 def reset_files():
 	for dir in ['keys/', 'cacerts/', 'certs/', 'pkcs12/',
 			    'pkcs12/curveca', 'pkcs12/mainca',
-				'pkcs12/otherca', 'pkcs12/badca', 'crls/']:
+				'pkcs12/otherca', 'crls/']:
 		if os.path.isdir(dir):
 			shutil.rmtree(dir)
 		os.mkdir(dir)
@@ -73,7 +73,7 @@ def create_keypair(algo=crypto.TYPE_RSA, bits=1024):
 
 def create_csr(pkey, CN,
 			   C=None, ST=None, L=None, O=None, OU=None,
-			   emailAddress=None, algo='sha256'):
+			   emailAddress=None, algo='sha1'):
 	""" Create the certreq
 	"""
 	req = crypto.X509Req()
@@ -101,29 +101,15 @@ def set_cert_extensions(cert, issuer, isCA=False, isRoot=False, ocsp=False, ocsp
 
 	if isCA:
 		ku_str = ku_str + ',keyCertSign,cRLSign'
-		if "badca" in str(issuer.get_subject().commonName):
-			bc = "CA:FALSE"
-		else:
-			bc = "CA:TRUE"
+		bc = "CA:TRUE"
 	else:
 		bc = "CA:FALSE"
 
 	add_ext(cert, 'basicConstraints', False, bc)
 
 	if not isCA:
-		SAN = "DNS: " + cnstr
-		if "." in cnstr:
-			ee = cnstr.split(".")[0]
-			print "EE:%s"%ee
-			if ee == "west" or ee == "east":
-				SAN += ", email:%s@testing.libreswan.org"%ee
-				if ee == "west":
-					SAN += ", IP:192.1.2.45"
-				else:
-					SAN += ", IP:192.1.2.23"
-			if ee == "otherwest" or ee == "othereast":
-				SAN += ", email:%s@other.libreswan.org"%ee
-		add_ext(cert, 'subjectAltName', False, SAN)
+		dnsname = "DNS: " + cnstr
+		add_ext(cert, 'subjectAltName', False, dnsname)
 
 	if cnstr == 'usage-server.testing.libreswan.org':
 		eku_str = 'serverAuth'
@@ -152,9 +138,9 @@ def set_cert_extensions(cert, issuer, isCA=False, isRoot=False, ocsp=False, ocsp
 def create_sub_cert(CN, CACert, CAkey, snum, START, END,
 					C='CA', ST='Ontario', L='Toronto',
 					O='Libreswan', OU='Test Department',
-					emailAddress='',
+					emailAddress='testing@libreswan.org',
 					ty=crypto.TYPE_RSA, keybits=1024,
-					sign_alg='sha256', isCA=False, ocsp=False):
+					sign_alg='sha1', isCA=False, ocsp=False):
 	""" Create a subordinate cert and return the cert, key tuple
     This could be a CA for an intermediate, or not for an EE
 	"""
@@ -177,7 +163,8 @@ def create_sub_cert(CN, CACert, CAkey, snum, START, END,
 	else:
 		ocspuri = True
 
-	set_cert_extensions(cert, CACert, isCA=isCA, isRoot=False, ocsp=ocsp, ocspuri=ocspuri)
+	set_cert_extensions(cert, CACert, isCA=isCA, isRoot=False, ocsp=ocsp,
+															   ocspuri=ocspuri)
 	cert.sign(CAkey, sign_alg)
 
 	return cert, certkey
@@ -188,7 +175,7 @@ def create_root_ca(CN, START, END,
 				   O='Libreswan', OU='Test Department',
 				   emailAddress='testing@libreswan.org',
 				   ty=crypto.TYPE_RSA, keybits=1024,
-				   sign_alg='sha256'):
+				   sign_alg='sha1'):
 	""" Create a root CA - Returns the cert, key tuple
 	"""
 	cakey = create_keypair(ty, keybits)
@@ -204,7 +191,8 @@ def create_root_ca(CN, START, END,
 	cacert.set_pubkey(careq.get_pubkey())
 	cacert.set_version(2)
 
-	set_cert_extensions(cacert, cacert, isCA=True, isRoot=True, ocsp=True, ocspuri=True)
+	set_cert_extensions(cacert, cacert,
+						isCA=True, isRoot=True, ocsp=True, ocspuri=True)
 	cacert.sign(cakey, sign_alg)
 
 	return cacert, cakey
@@ -225,10 +213,8 @@ def gen_gmtime_dates():
 			time.strftime(gmtfmt, time.gmtime())) - (60*60*24)
 	two_days_ago_stamp = ok_stamp - (60*60*48)
 	two_days_ago_end_stamp = two_days_ago_stamp + (60*60*24)
-        # Make future certs only +300 days, so we have a time overlap
-        # between currently valid certs (1 year) and these futuristic certs
 	future_stamp = ok_stamp + (60*60*24*365*1)
-	future_end_stamp = future_stamp + (60*60*24*365*2)
+	future_end_stamp = future_stamp + (60*60*24*365*1)
 
 	return dict(OK_NOW=gmc(ok_stamp),
 				OLD=gmc(two_days_ago_stamp),
@@ -246,7 +232,7 @@ def store_cert_and_key(name, cert, key):
 	ext = cert.get_extension(0)
 	if ext.get_short_name() == 'basicConstraints':
 		# compare the bytes for CA:True
-		if name == "badca" or '0\x03\x01\x01\xff' == ext.get_data():
+		if '0\x03\x01\x01\xff' == ext.get_data():
 			ca_certs[name] = cert, key
 		else:
 			end_certs[name] = cert, key
@@ -267,7 +253,7 @@ def create_basic_pluto_cas(ca_names):
 		print " - creating %s" % name
 		ca, key = create_root_ca(CN="Libreswan test CA for " + name,
 								 START=dates['OK_NOW'],
-								 END=dates['FUTURE_END'])
+								 END=dates['FUTURE'])
 		writeout_cert_and_key("cacerts/", name, ca, key)
 		store_cert_and_key(name, ca, key)
 
@@ -292,13 +278,13 @@ def create_mainca_end_certs(mainca_end_certs):
 	for name in mainca_end_certs:
 		# put special cert handling here
 		print " - creating %s" % name
-		if name == 'smallkey':
+		if name == 'bigkey':
 			keysize = 2048
 		else:
 			if name == 'key4096':
 				keysize = 4096
 			else:
-				keysize = 3072
+				keysize = 1024
 
 		if name == 'notyetvalid':
 			startdate = dates['FUTURE']
@@ -308,12 +294,10 @@ def create_mainca_end_certs(mainca_end_certs):
 			enddate = dates['OLD_END']
 		else:
 			startdate = dates['OK_NOW']
-			enddate = dates['FUTURE_END']
+			enddate = dates['FUTURE']
 
-		if 'other' in name:
+		if name == 'signedbyother':
 			signer = 'otherca'
-		elif name[:3] == 'bad':
-			signer = 'badca'
 		else:
 			signer = 'mainca'
 
@@ -334,26 +318,18 @@ def create_mainca_end_certs(mainca_end_certs):
 			common_name = 'space invaders.testing.libreswan.org'
 		elif name == 'cnofca':
 			common_name = 'Libreswan test CA for mainca'
-		elif 'other' in name:
-			common_name = name + '.other.libreswan.org'
 		else:
 			common_name = name + '.testing.libreswan.org'
 
 		if name == 'hashsha2':
-			alg = 'sha1'
-		else:
 			alg = 'sha256'
-
-		if " " in common_name:
-			emailAddress = "root@testing.libreswan.org"
 		else:
-			emailAddress = "user-%s@testing.libreswan.org"%name
+			alg = 'sha1'
 
 		cert, key = create_sub_cert(common_name,
 									ca_certs[signer][0],
 									ca_certs[signer][1],
 									serial, O=org,
-									emailAddress=emailAddress,
 									START=startdate, END=enddate,
 									keybits=keysize,
 									sign_alg=alg, ocsp=ocsp_resp)
@@ -394,7 +370,6 @@ def create_chained_certs(chain_ca_roots, max_path, prefix=''):
 									  signpair[0], signpair[1], serial,
 									  START=dates['OK_NOW'],
 									  END=dates['FUTURE'],
-									  emailAddress="%s@testing.libreswan.org"%cname,
 									  isCA=True, ocsp=False)
 
 			writeout_cert_and_key("certs/", cname, ca, key)
@@ -405,12 +380,11 @@ def create_chained_certs(chain_ca_roots, max_path, prefix=''):
 
 			if level == max_path - 1:
 				endcert_name = prefix + chainca + "_endcert"
-
+				
 				signpair = ca_certs[lastca]
 				print " - creating %s" % endcert_name
 				ecert, ekey = create_sub_cert(endcert_name + ".testing.libreswan.org",
 											  signpair[0], signpair[1], serial,
-											  emailAddress="%s@testing.libreswan.org"%endcert_name,
 											  START=dates['OK_NOW'],
 											  END=dates['FUTURE'])
 
@@ -424,7 +398,6 @@ def create_chained_certs(chain_ca_roots, max_path, prefix=''):
 				print " - creating %s" % endrev_name
 				ercert, erkey = create_sub_cert(endrev_name + ".testing.libreswan.org",
 											  signpair[0], signpair[1], serial,
-											  emailAddress="%s@testing.libreswan.org"%endcert_name,
 											  START=dates['OK_NOW'],
 											  END=dates['FUTURE'])
 
@@ -450,9 +423,9 @@ def create_leading_zero_crl():
 		nl = ''
 
 		crl = zerosig.export(signcert, signkey,
-							 type=crypto.FILETYPE_TEXT, days=days, digest='sha256')
+							 type=crypto.FILETYPE_TEXT, days=days, digest='sha1')
 		der = zerosig.export(signcert, signkey,
-							 type=crypto.FILETYPE_ASN1, days=days, digest='sha256')
+							 type=crypto.FILETYPE_ASN1, days=days, digest='sha1')
 
 		for index, line in enumerate(crl.splitlines()):
 			if "Signature Algorithm" in line and index >= 5:
@@ -500,7 +473,7 @@ def create_crlsets():
 		f.write(needupdate.export(ca_certs['mainca'][0],
 								  ca_certs['mainca'][1],
 								  type=crypto.FILETYPE_ASN1,
-								  days=0, digest='sha256'))
+								  days=0, digest='sha1'))
 
 	print "sleeping for needupdate/valid crl time difference"
 	time.sleep(5)
@@ -511,7 +484,7 @@ def create_crlsets():
 		f.write(validcrl.export(ca_certs['mainca'][0],
 								ca_certs['mainca'][1],
 								type=crypto.FILETYPE_ASN1,
-								days=15, digest='sha256'))
+								days=15, digest='sha1'))
 
 	othercrl = crypto.CRL()
 	othercrl.add_revoked(revoked)
@@ -520,7 +493,7 @@ def create_crlsets():
 		f.write(othercrl.export(ca_certs['otherca'][0],
 								ca_certs['otherca'][1],
 								type=crypto.FILETYPE_ASN1,
-								days=15, digest='sha256'))
+								days=15, digest='sha1'))
 
 	notyet = crypto.CRL()
 	notyet.add_revoked(future_revoked)
@@ -528,7 +501,7 @@ def create_crlsets():
 		f.write(notyet.export(ca_certs['mainca'][0],
 							  ca_certs['mainca'][1],
 							  type=crypto.FILETYPE_ASN1,
-							  days=15, digest='sha256'))
+							  days=15, digest='sha1'))
 
 	 #create_leading_zero_crl()
 
@@ -604,7 +577,7 @@ def run_dist_certs():
 	certificates, p12 files, keys, and CRLs
 	"""
 	# Add root CAs here
-	basic_pluto_cas =  ('mainca', 'otherca', 'badca')
+	basic_pluto_cas =  ('mainca', 'otherca')
 	# Add end certs here
 	mainca_end_certs = ('nic','east','west', 'road', 'sunset',
 						'sunrise','north','south',
@@ -614,9 +587,9 @@ def run_dist_certs():
 						'nic-noext', 'nic-nourl',
 						'japan','bigkey', 'key4096',
 						'notyetvalid','notvalidanymore',
-						'signedbyother','otherwest','othereast','wrongdnorg',
+						'signedbyother','wrongdnorg',
 						'unwisechar','spaceincn','hashsha2',
-						'cnofca','revoked', 'badwest', 'badeast')
+						'cnofca','revoked')
 	# Add chain roots here
 	chain_ca_roots =   ('east_chain', 'west_chain')
 
@@ -651,7 +624,6 @@ def main():
 
 	create_nss_pw()
 	os.chdir(cwd)
-
 	print "finished!"
 
 

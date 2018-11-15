@@ -1,12 +1,12 @@
 /*
- * header file for Libreswan library functions
+ * header file for FreeS/WAN library functions
  * Copyright (C) 1998, 1999, 2000  Henry Spencer.
  * Copyright (C) 1999, 2000, 2001  Richard Guy Briggs
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,35 +17,163 @@
 #ifndef _LIBRESWAN_H
 #define _LIBRESWAN_H    /* seen it, no need to see it again */
 
-#include "err.h"
-
-/*
- * Libreswan was written before <stdbool.h> was standardized.
- * We continue to use TRUE and FALSE because we think that they are clearer
- * than true or false.
- */
-
-#ifndef __KERNEL__
-# include <stdbool.h> /* for 'bool' */
-#endif
-
+/* you'd think this should be builtin to compiler... */
 #ifndef TRUE
-# define TRUE true
+# define TRUE 1
+# ifndef __KERNEL__
+typedef int bool;
+# endif
 #endif
 
 #ifndef FALSE
-# define FALSE false
+# define FALSE 0
 #endif
 
 #include <stddef.h>
 
-/* Some constants code likes to use. Useful? */
+/* ================ time-related declarations ================ */
 
 enum {
 	secs_per_minute = 60,
 	secs_per_hour = 60 * secs_per_minute,
 	secs_per_day = 24 * secs_per_hour
 };
+
+#if !defined(__KERNEL__)
+
+#include <sys/time.h>
+#include <time.h>
+
+/*
+ * UNDEFINED_TIME is meant to be an impossible exceptional time_t value.
+ *
+ * ??? On UNIX, 0 is a value that means 1970-01-01 00:00:00 +0000 (UTC).
+ *
+ * UNDEFINED_TIME is used as a real time_t value in certificate handling.
+ * Perhaps this is sancioned by X.509.
+ *
+ * UNDEFINED_TIME is used as a mono time_t value in liveness_check().
+ * 0 is PROBABLY safely distinct in this application.
+ */
+#define UNDEFINED_TIME  ((time_t)0)	/* ??? what a kludge! */
+
+#define TIME_T_MAX  ((time_t) ((1ull << (sizeof(time_t) * BITS_PER_BYTE - 1)) - 1))
+
+/*
+ * Wrap time_t so that dimensional analysis will be enforced by the compiler.
+ *
+ * realtime_t: absolute UTC time.  Might be discontinuous due to clock adjustment.
+ * monotime_t: absolute monotonic time.  No discontinuities (except for machine sleep?)
+ * deltatime_t: relative time between events.  Presumed continuous.
+ *
+ * Try to stick to the operations implemented here.
+ * A good compiler should produce identical code for these or for time_t values
+ * but will catch nonsense operations through type enforcement.
+ */
+
+typedef struct { time_t delta_secs; } deltatime_t;
+typedef struct { time_t real_secs; } realtime_t;
+typedef struct { time_t mono_secs; } monotime_t;
+
+/* delta time (interval) operations */
+
+static inline deltatime_t deltatime(time_t secs) {
+	deltatime_t d = { secs };
+	return d;
+}
+
+static inline unsigned long deltamillisecs(deltatime_t d) {
+	return d.delta_secs * 1000;
+}
+
+static inline time_t deltasecs(deltatime_t d) {
+	return d.delta_secs;
+}
+
+static inline deltatime_t deltatimescale(int num, int denom, deltatime_t d) {
+	/* ??? should check for overflow */
+	return deltatime(deltasecs(d) * num / denom);
+}
+
+static inline bool deltaless(deltatime_t a, deltatime_t b)
+{
+	return deltasecs(a) < deltasecs(b);
+}
+
+static inline bool deltaless_tv_tv(const struct timeval a, const struct timeval b)
+{
+	return a.tv_sec < b.tv_sec ||
+		( a.tv_sec == b.tv_sec && a.tv_usec < b.tv_usec);
+}
+
+static inline bool deltaless_tv_dt(const struct timeval a, const deltatime_t b)
+{
+	return a.tv_sec < deltasecs(b);
+}
+
+/* real time operations */
+
+static inline realtime_t realtimesum(realtime_t t, deltatime_t d) {
+	realtime_t s = { t.real_secs + d.delta_secs };
+	return s;
+}
+
+static inline realtime_t undefinedrealtime(void)
+{
+	realtime_t u = { UNDEFINED_TIME };
+
+	return u;
+}
+
+static inline bool isundefinedrealtime(realtime_t t)
+{
+	return t.real_secs == UNDEFINED_TIME;
+}
+
+static inline bool realbefore(realtime_t a, realtime_t b)
+{
+	return a.real_secs < b.real_secs;
+}
+
+static inline deltatime_t realtimediff(realtime_t a, realtime_t b) {
+	deltatime_t d = { a.real_secs - b.real_secs };
+	return d;
+}
+
+static inline realtime_t realnow(void)
+{
+	realtime_t t;
+
+	time(&t.real_secs);
+	return t;
+}
+
+#define REALTIMETOA_BUF     30	/* size of realtimetoa string buffer */
+extern char *realtimetoa(const realtime_t rtm, bool utc, char *buf, size_t blen);
+
+/* monotonic time operations */
+
+static inline monotime_t monotimesum(monotime_t t, deltatime_t d) {
+	monotime_t s = { t.mono_secs + d.delta_secs };
+	return s;
+}
+
+static inline bool monobefore(monotime_t a, monotime_t b)
+{
+	return a.mono_secs < b.mono_secs;
+}
+
+static inline deltatime_t monotimediff(monotime_t a, monotime_t b) {
+	deltatime_t d = { a.mono_secs - b.mono_secs };
+
+	return d;
+}
+
+/* defs.h declares extern monotime_t mononow(void) */
+
+#endif	/* !defined(__KERNEL__) */
+
+/* ================ end of time-related declarations ================ */
 
 /*
  * When using uclibc, malloc(0) returns NULL instead of success. This is
@@ -63,6 +191,7 @@ enum {
  * where we get them depends on whether we're in userland or not.
  */
 /* things that need to come from one place or the other, depending */
+#if defined(linux)
 #if defined(__KERNEL__)
 #include <linux/types.h>
 #include <linux/socket.h>
@@ -74,8 +203,7 @@ enum {
 #include <libreswan/ipsec_param.h>
 #define user_assert(foo)  { } /* nothing */
 
-#else /* NOT in (linux) kernel */
-
+#else /* NOT in kernel */
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <string.h>
@@ -83,11 +211,74 @@ enum {
 #include <assert.h>
 #define user_assert(foo) assert(foo)
 #include <stdio.h>
-#include <stdint.h>
 
-#endif  /* (linux) kernel */
+#  define uint8_t u_int8_t
+#  define uint16_t u_int16_t
+#  define uint32_t u_int32_t
+#  define uint64_t u_int64_t
+
+#endif  /* __KERNEL__ */
+
+#endif  /* linux */
 
 #define DEBUG_NO_STATIC static
+
+/*
+ * Yes Virginia, we have started a windows port.
+ */
+#if defined(__CYGWIN32__)
+#if !defined(WIN32_KERNEL)
+/* get windows equivalents */
+#include <stdio.h>
+#include <string.h>
+#include <win32/types.h>
+#include <netinet/in.h>
+#include <cygwin/socket.h>
+#include <assert.h>
+#define user_assert(foo) assert(foo)
+#endif  /* _KERNEL */
+#endif  /* WIN32 */
+
+/*
+ * Kovacs? A macosx port?
+ */
+#if defined(macintosh) || (defined(__MACH__) && defined(__APPLE__))
+#include <TargetConditionals.h>
+#include <AvailabilityMacros.h>
+#include <machine/types.h>
+#include <machine/endian.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <time.h>
+#include <sys/time.h>
+#include <string.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <tcpd.h>
+#include <assert.h>
+#define user_assert(foo) assert(foo)
+#define __u32  unsigned int
+#define __u8  unsigned char
+#define s6_addr16 __u6_addr.__u6_addr16
+#define DEBUG_NO_STATIC static
+#endif
+
+/*
+ * FreeBSD
+ */
+#if defined(__FreeBSD__)
+#  define DEBUG_NO_STATIC static
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <assert.h>
+#define user_assert(foo) assert(foo)
+/* apparently this way to deal with an IPv6 address is not standard. */
+#define s6_addr16 __u6_addr.__u6_addr16
+#endif
 
 #ifndef IPPROTO_COMP
 #  define IPPROTO_COMP 108
@@ -102,17 +293,40 @@ enum {
 #define ESPINUDP_WITH_NON_ESP   2       /* draft-ietf-ipsec-nat-t-ike-02    */
 #endif
 
-#include "ip_address.h"
+/*
+ * Basic data types for the address-handling functions.
+ * ip_address and ip_subnet are supposed to be opaque types; do not
+ * use their definitions directly, they are subject to change!
+ */
 
-#ifdef NEED_SIN_LEN
-#define SET_V4(a)	{ (a).u.v4.sin_family = AF_INET; (a).u.v4.sin_len = sizeof(struct sockaddr_in); }
-#define SET_V6(a)	{ (a).u.v6.sin6_family = AF_INET6; (a).u.v6.sin6_len = sizeof(struct sockaddr_in6); }
-#else
-#define SET_V4(a)	{ (a).u.v4.sin_family = AF_INET; }
-#define SET_V6(a)	{ (a).u.v6.sin6_family = AF_INET6; }
-#endif
+/* first, some quick fakes in case we're on an old system with no IPv6 */
+#if !defined(s6_addr16) && defined(__CYGWIN32__)
+extern struct in6_addr {
+	union {
+		u_int8_t u6_addr8[16];
+		u_int16_t u6_addr16[8];
+		u_int32_t u6_addr32[4];
+	} in6_u;
+#define s6_addr                 in6_u.u6_addr8
+#define s6_addr16               in6_u.u6_addr16
+#define s6_addr32               in6_u.u6_addr32
+};
+extern struct sockaddr_in6 {
+	unsigned short int sin6_family;         /* AF_INET6 */
+	__u16 sin6_port;                        /* Transport layer port # */
+	__u32 sin6_flowinfo;                    /* IPv6 flow information */
+	struct in6_addr sin6_addr;              /* IPv6 address */
+	__u32 sin6_scope_id;                    /* scope id (new in RFC2553) */
+};
+#endif  /* !s6_addr16 */
 
 /* then the main types */
+typedef struct {
+	union {
+		struct sockaddr_in v4;
+		struct sockaddr_in6 v6;
+	} u;
+} ip_address;
 typedef struct {
 	ip_address addr;
 	int maskbits;
@@ -171,6 +385,7 @@ typedef struct {                                /* to identify an SA, we need: *
 } ip_said;
 
 /* misc */
+typedef const char *err_t;      /* error message, or NULL for success */
 struct prng {                   /* pseudo-random-number-generator guts */
 	unsigned char sbox[256];
 	int i, j;
@@ -178,7 +393,7 @@ struct prng {                   /* pseudo-random-number-generator guts */
 };
 
 /*
- * definitions for user space, taken linux/include/libreswan/ipsec_sa.h
+ * definitions for user space, taken from freeswan/ipsec_sa.h
  */
 typedef uint32_t IPsecSAref_t;
 
@@ -201,13 +416,29 @@ typedef uint32_t IPsecSAref_t;
 /* Not representable as an nfmark */
 #define IPSEC_SAREF_NA   ((IPsecSAref_t)0xffff0001)
 
-#include "lswcdefs.h"
+/* GCC magic for use in function definitions! */
+#ifdef GCC_LINT
+# define PRINTF_LIKE(n) __attribute__ ((format(printf, n, n + 1)))
+# define NEVER_RETURNS __attribute__ ((noreturn))
+# define UNUSED __attribute__ ((unused))
+# define MUST_USE_RESULT  __attribute__ ((warn_unused_result))
+#else
+# define PRINTF_LIKE(n) /* ignore */
+# define NEVER_RETURNS  /* ignore */
+# define UNUSED         /* ignore */
+# define MUST_USE_RESULT	/* ignore */
+#endif
+
+#ifdef COMPILER_HAS_NO_PRINTF_LIKE
+# undef PRINTF_LIKE
+# define PRINTF_LIKE(n) /* ignore */
+#endif
 
 /*
  * function to log stuff from libraries that may be used in multiple
  * places.
  */
-typedef int (*libreswan_keying_debug_func_t)(const char *message, ...) PRINTF_LIKE(1);
+typedef int (*libreswan_keying_debug_func_t)(const char *message, ...);
 
 /*
  * new IPv6-compatible functions
@@ -231,6 +462,12 @@ extern size_t addrtot(const ip_address *src, int format, char *buf, size_t bufle
 extern size_t inet_addrtot(int type, const void *src, int format, char *buf,
 		    size_t buflen);
 extern size_t sin_addrtot(const void *sin, int format, char *dst, size_t dstlen);
+/* RFC 1886 old IPv6 reverse-lookup format is the bulkiest */
+#define ADDRTOT_BUF     (32 * 2 + 3 + 1 + 3 + 1 + 1)
+typedef struct {
+	char buf[ADDRTOT_BUF];
+} ipstr_buf;
+extern const char *ipstr(const ip_address *src, ipstr_buf *b);
 extern err_t ttorange(const char *src, size_t srclen, int af, ip_range *dst,
 		bool non_zero);
 extern size_t rangetot(const ip_range *src, char format, char *dst, size_t dstlen);
@@ -244,7 +481,6 @@ extern size_t subnetporttot(const ip_subnet *src, int format, char *buf,
 extern err_t ttosa(const char *src, size_t srclen, ip_said *dst);
 extern size_t satot(const ip_said *src, int format, char *bufptr, size_t buflen);
 #define SATOT_BUF       (5 + ULTOT_BUF + 1 + ADDRTOT_BUF)
-#define SAMIGTOT_BUF    (16 + SATOT_BUF + ADDRTOT_BUF)
 extern err_t ttodata(const char *src, size_t srclen, int base, char *buf,
 	      size_t buflen, size_t *needed);
 extern err_t ttodatav(const char *src, size_t srclen, int base,
@@ -263,7 +499,7 @@ extern size_t splitkeytoid(const unsigned char *e, size_t elen,
 		    size_t mlen, char *dst, size_t dstlen);
 #define KEYID_BUF       10      /* up to 9 text digits plus NUL */
 extern err_t ttoprotoport(char *src, size_t src_len, u_int8_t *proto, u_int16_t *port,
-			  bool *has_port_wildcard);
+		   int *has_port_wildcard);
 
 /* initializations */
 extern void initsaid(const ip_address *addr, ipsec_spi_t spi, int proto,
@@ -284,7 +520,7 @@ extern err_t rangetosubnet(const ip_address *from, const ip_address *to,
 extern int addrtypeof(const ip_address *src);
 extern int subnettypeof(const ip_subnet *src);
 extern size_t addrlenof(const ip_address *src);
-extern size_t addrbytesptr_read(const ip_address *src, const unsigned char **dst);
+extern size_t addrbytesptr(const ip_address *src, unsigned char **dst);
 extern size_t addrbytesptr_write(ip_address *src, unsigned char **dst);
 extern size_t addrbytesof(const ip_address *src, unsigned char *dst, size_t dstlen);
 extern int masktocount(const ip_address *src);
@@ -292,18 +528,24 @@ extern void networkof(const ip_subnet *src, ip_address *dst);
 extern void maskof(const ip_subnet *src, ip_address *dst);
 
 /* tests */
-extern bool sameaddr(const ip_address *a, const ip_address *b);
+extern int sameaddr(const ip_address *a, const ip_address *b);
 extern int addrcmp(const ip_address *a, const ip_address *b);
-extern bool samesubnet(const ip_subnet *a, const ip_subnet *b);
-extern bool addrinsubnet(const ip_address *a, const ip_subnet *s);
-extern bool subnetinsubnet(const ip_subnet *a, const ip_subnet *b);
-extern bool subnetishost(const ip_subnet *s);
-extern bool samesaid(const ip_said *a, const ip_said *b);
-extern bool sameaddrtype(const ip_address *a, const ip_address *b);
-extern bool samesubnettype(const ip_subnet *a, const ip_subnet *b);
+extern int samesubnet(const ip_subnet *a, const ip_subnet *b);
+extern int addrinsubnet(const ip_address *a, const ip_subnet *s);
+extern int subnetinsubnet(const ip_subnet *a, const ip_subnet *b);
+extern int subnetishost(const ip_subnet *s);
+extern int samesaid(const ip_said *a, const ip_said *b);
+extern int sameaddrtype(const ip_address *a, const ip_address *b);
+extern int samesubnettype(const ip_subnet *a, const ip_subnet *b);
 extern int isanyaddr(const ip_address *src);
 extern int isunspecaddr(const ip_address *src);
 extern int isloopbackaddr(const ip_address *src);
+
+/* low-level grot */
+extern int portof(const ip_address *src);
+extern void setportof(int port, ip_address *dst);
+extern struct sockaddr *sockaddrof(ip_address *src);
+extern size_t sockaddrlenof(const ip_address *src);
 
 /* PRNG */
 extern void prng_init(struct prng *prng, const unsigned char *key, size_t keylen);
@@ -360,7 +602,7 @@ subnet6toa(struct in6_addr *addr,
 extern struct in_addr subnetof(struct in_addr addr,
 			struct in_addr mask
 			);
-extern struct in_addr hostof(struct in_addr addr,
+extern struct in_addr hostof( struct in_addr addr,
 		       struct in_addr mask
 		       );
 extern struct in_addr broadcastof(struct in_addr addr,
@@ -416,5 +658,31 @@ enum klips_debug_flags {
 #define PASSTHROUGHSPI  0
 #define PASSTHROUGHDST  0
 #endif
+
+/*
+ * reqid definitions
+ *
+ * A reqid is a numerical identifier used to match IPsec SAs using
+ * iptables with NETKEY/XFRM. This identifier is normally automatically
+ * allocated.  It is exported to the _updown script as REQID. On Linux,
+ * reqids are supported with IP Connection Tracking and NAT (iptables).
+ * Automatically generated values use the range 16380 and higher.
+ * Manually specified reqid values therefore must be between 1 and 16379.
+ *
+ * Automatically generated reqids are allocated in groups of four, one
+ * for each potential SA and pseudo SA in an SA bundle.  Their number
+ * will be above 16380.  The base number will be a multiple of four.
+ *
+ * Manually assigned reqids are all identical for a particular connection
+ * and its instantiations.
+ */
+
+typedef uint32_t reqid_t;
+
+#define IPSEC_MANUAL_REQID_MAX  0x3fff
+
+#define reqid_ah(r)	(r)
+#define reqid_esp(r)	((r) <= IPSEC_MANUAL_REQID_MAX ? (r) : (r) + 1)
+#define reqid_ipcomp(r)	((r) <= IPSEC_MANUAL_REQID_MAX ? (r) : (r) + 2)
 
 #endif /* _LIBRESWAN_H */

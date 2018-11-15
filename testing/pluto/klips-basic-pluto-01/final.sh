@@ -1,9 +1,7 @@
-ipsec whack --trafficstatus
-# should show non-zero counters on both ends
-grep traffic /tmp/pluto.log
+ipsec look
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
-../bin/check-for-core.sh
+if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -22,15 +22,7 @@
 
 #include <net/if.h>
 
-#include "monotime.h"
-#include "reqid.h"
-#include "connections.h"	/* for policy_prio_t et.al. */
-
-struct sa_marks;
-struct spd_route;
-
 extern bool can_do_IPcomp;  /* can system actually perform IPCOMP? */
-extern reqid_t global_reqids;
 
 /*
  * Declare eroute things early enough for uses.
@@ -90,19 +82,13 @@ struct kernel_sa {
 	const ip_address *src;
 	const ip_address *dst;
 
-	const ip_address *ndst;		/* netlink migration new destination */
-	const ip_address *nsrc;		/* netlink migration new source */
-
 	const ip_subnet *src_client;
 	const ip_subnet *dst_client;
 
 	bool inbound;
-	int  nk_dir;			/* netky has 3, in,out & fwd */
 	bool add_selector;
 	bool esn;
-	bool decap_dscp;
-	bool nopmtudisc;
-	uint32_t tfcpad;
+	u_int32_t tfcpad;
 	ipsec_spi_t spi;
 	unsigned proto;
 	unsigned int transport_proto;
@@ -110,22 +96,11 @@ struct kernel_sa {
 	unsigned replay_window;
 	reqid_t reqid;
 
-	unsigned authalg; /* use INTEG */
-
-	const struct integ_desc *integ;
+	unsigned authalg;
 	unsigned authkeylen;
 	unsigned char *authkey;
 
-	/*
-	 * This field contains the compression algorithm ID (or 0).
-	 *
-	 * XXX: For the moment, when ESP, it also contains the
-	 * encryption algorithm's IKEv1 ID.  This is a just-in-case
-	 * some code is still relying on that value.
-	 */
-	unsigned compalg;
-
-	const struct encrypt_desc *encrypt;
+	unsigned encalg;
 	unsigned enckeylen;
 	unsigned char *enckey;
 
@@ -134,22 +109,18 @@ struct kernel_sa {
 	IPsecSAref_t refhim;
 
 	int encapsulation;
-	uint16_t natt_sport, natt_dport;
-	uint8_t natt_type;
+	u_int16_t natt_sport, natt_dport;
+	u_int8_t transid, natt_type;
 	ip_address *natt_oa;
 	const char *text_said;
 #ifdef HAVE_LABELED_IPSEC
 	struct xfrm_user_sec_ctx_ike *sec_ctx;
 #endif
-	const char *nic_offload_dev;
 
 	deltatime_t sa_lifetime; /* number of seconds until SA expires */
-	/*
-	 * Below two enties need to enabled and used,
-	 * instead of getting passed
-	 * uint32_t sa_priority;
-	 * struct sa_marks *sa_marks;
-	 */
+	/* below two need to enabled and used, instead of getting passed */
+	// uint32_t sa_priority;
+	// struct sa_marks *sa_marks;
 };
 
 struct raw_iface {
@@ -157,9 +128,6 @@ struct raw_iface {
 	char name[IFNAMSIZ + 20]; /* what would be a safe size? */
 	struct raw_iface *next;
 };
-
-/* which kernel interface to use */
-extern enum kernel_interface kern_interface;
 
 LIST_HEAD(iface_list, iface_dev);
 extern struct iface_list interface_dev;
@@ -176,18 +144,17 @@ struct kernel_ops {
 	enum kernel_interface type;
 	const char *kern_name;
 	bool inbound_eroute;
+	bool policy_lifetime;
 	bool overlap_supported;
 	bool sha2_truncbug_support;
 	int replay_window;
 	int *async_fdp;
-	int *route_fdp;
 
 	void (*init)(void);
 	void (*pfkey_register)(void);
 	void (*pfkey_register_response)(const struct sadb_msg *msg);
 	void (*process_queue)(void);
-	void (*process_msg)(int);
-	void (*scan_shunts)(void);
+	void (*process_msg)(void);
 	void (*set_debug)(int,
 			  libreswan_keying_debug_func_t debug_func,
 			  libreswan_keying_debug_func_t error_func);
@@ -225,7 +192,7 @@ struct kernel_ops {
 	bool (*grp_sa)(const struct kernel_sa *sa_outer,
 		       const struct kernel_sa *sa_inner);
 	bool (*del_sa)(const struct kernel_sa *sa);
-	bool (*get_sa)(const struct kernel_sa *sa, uint64_t *bytes,
+	bool (*get_sa)(const struct kernel_sa *sa, u_int *bytes,
 		       uint64_t *add_time);
 	ipsec_spi_t (*get_spi)(const ip_address *src,
 			       const ip_address *dst,
@@ -242,10 +209,6 @@ struct kernel_ops {
 			  struct state *st);
 	void (*process_ifaces)(struct raw_iface *rifaces);
 	bool (*exceptsocket)(int socketfd, int family);
-	err_t (*migrate_sa_check)(void);
-	bool (*migrate_sa)(struct state *st);
-	bool (*v6holes)();
-	bool (*poke_ipsec_policy_hole)(struct raw_iface *ifp, int fd);
 };
 
 extern int create_socket(struct raw_iface *ifp, const char *v_name, int port);
@@ -332,7 +295,7 @@ struct bare_shunt {
 };
 
 extern void show_shunt_status(void);
-extern unsigned show_shunt_count(void);
+extern int show_shunt_count(void);
 
 struct bare_shunt **bare_shunt_ptr(const ip_subnet *ours,
 				   const ip_subnet *his,
@@ -355,18 +318,16 @@ struct xfrm_user_sec_ctx_ike; /* forward declaration of tag */
 #endif
 extern void record_and_initiate_opportunistic(const ip_subnet *,
 					      const ip_subnet *,
-					      int transport_proto,
+					      int transport_proto
 #ifdef HAVE_LABELED_IPSEC
-					      struct xfrm_user_sec_ctx_ike *,
+					      , struct xfrm_user_sec_ctx_ike *
 #endif
-					      const char *why);
+					      , const char *why);
 extern void init_kernel(void);
 
 struct connection;      /* forward declaration of tag */
 extern bool trap_connection(struct connection *c);
 extern void unroute_connection(struct connection *c);
-extern void migration_up(struct connection *c,  struct state *st);
-extern void migration_down(struct connection *c,  struct state *st);
 
 extern bool has_bare_hold(const ip_address *src, const ip_address *dst,
 			  int transport_proto);
@@ -409,8 +370,6 @@ extern bool route_and_eroute(struct connection *c,
 
 extern bool was_eroute_idle(struct state *st, deltatime_t idle_max);
 extern bool get_sa_info(struct state *st, bool inbound, deltatime_t *ago /* OUTPUT */);
-extern bool migrate_ipsec_sa(struct state *st);
-
 
 extern bool eroute_connection(const struct spd_route *sr,
 			      ipsec_spi_t cur_spi,
@@ -441,6 +400,8 @@ extern const struct kernel_ops klips_kernel_ops;
 extern const struct kernel_ops mast_kernel_ops;
 #endif
 
+extern bool kernel_overlap_supported(void);
+extern const char *kernel_if_name(void);
 extern void show_kernel_interface(void);
 extern void free_kernelfd(void);
 extern void expire_bare_shunts(void);
@@ -454,6 +415,14 @@ extern void expire_bare_shunts(void);
 extern void add_bare_shunt(const ip_subnet *ours, const ip_subnet *his,
 		int transport_proto, ipsec_spi_t shunt_spi,
 		const char *why);
+
+/*
+ * Used to pass default priority from kernel_ops-> functions.
+ * Our priority is based on an unsigned long int, with the
+ * lower number being the highest priority, but this
+ * might need to be translated depending on the IPsec stack.
+ */
+#define DEFAULT_IPSEC_SA_PRIORITY 0
 
 // TEMPORARY
 extern bool raw_eroute(const ip_address *this_host,
@@ -476,8 +445,7 @@ extern bool raw_eroute(const ip_address *this_host,
 #endif
 		       );
 
-extern deltatime_t bare_shunt_interval;
-extern void set_text_said(char *text_said, const ip_address *dst,
-			  ipsec_spi_t spi, int sa_proto);
+unsigned ikev1_auth_kernel_attrs(enum ikev1_auth_attribute auth, int *alg);
+
 #define _KERNEL_H_
 #endif /* _KERNEL_H_ */

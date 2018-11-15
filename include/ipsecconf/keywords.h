@@ -7,15 +7,15 @@
  * Copyright (C) 2012 Kim B. Heino <b@bbbs.net>
  * Copyright (C) 2012 Philippe Vouters <philippe.vouters@laposte.net>
  * Copyright (C) 2013 David McCullough <ucdevel@gmail.com>
- * Copyright (C) 2013-2018 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2013-2018 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2016 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013-2016 Antony Antony <antony@phenome.org>
  * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -26,8 +26,6 @@
 
 #ifndef _KEYWORDS_H_
 #define _KEYWORDS_H_
-
-#include "lset.h"
 
 #ifndef _LIBRESWAN_H
 #include "libreswan.h"
@@ -50,17 +48,15 @@ enum keyword_string_config_field {
 	KSF_DUMPDIR,
 	KSF_STATSBINARY,
 	KSF_IPSECDIR,
-	KSF_NSSDIR,
 	KSF_SECRETSFILE,
 	KSF_PERPEERDIR,
+	KSF_MYID,
 	KSF_MYVENDORID,
 	KSF_PLUTOSTDERRLOG,
-	KSF_PLUTO_DNSSEC_ROOTKEY_FILE,
-	KSF_PLUTO_DNSSEC_ANCHORS,
 	KSF_PROTOSTACK,
 	KSF_LISTEN,
-	KSF_OCSP_URI,
-	KSF_OCSP_TRUSTNAME,
+	KSF_OCSPURI,
+	KSF_OCSPTRUSTNAME,
 	KSF_MAX
 };
 
@@ -72,16 +68,11 @@ enum keyword_numeric_config_field {
 	KBF_NEGOTIATIONSHUNT,
 	KBF_TYPE,
 	KBF_FRAGICMP,
-	KBF_MOBIKE,
 	KBF_HIDETOS,
 	KBF_UNIQUEIDS,
-	KBF_DO_DNSSEC,
 	KBF_PLUTOSTDERRLOGTIME,
 	KBF_PLUTOSTDERRLOGAPPEND,
-	KBF_PLUTOSTDERRLOGIP,
 	KBF_IKEPORT,
-	KBF_IKEBUF,
-	KBF_IKE_ERRQUEUE,
 	KBF_PERPEERLOG,
 	KBF_OVERRIDEMTU,
 	KBF_CONNMTU,
@@ -89,21 +80,18 @@ enum keyword_numeric_config_field {
 	KBF_TFCPAD,
 	KBF_REQID,
 	KBF_XFRMLIFETIME,
-	KBF_CRL_STRICT,
-	KBF_CRL_CHECKINTERVAL,
-	KBF_OCSP_STRICT,
-	KBF_OCSP_ENABLE,
-	KBF_OCSP_TIMEOUT,
-	KBF_OCSP_CACHE_SIZE,
-	KBF_OCSP_CACHE_MIN,
-	KBF_OCSP_CACHE_MAX,
-	KBF_OCSP_METHOD,
+	KBF_STRICTCRLPOLICY,
+	KBF_STRICTOCSPPOLICY,
+	KBF_OCSPENABLE,
+	KBF_OCSPTIMEOUT,
 	KBF_CURLTIMEOUT,
 	KBF_SEND_CA,
 	KBF_NATIKEPORT,
 	KBF_SEEDBITS,
 	KBF_DROP_OPPO_NULL,
 	KBF_KEEPALIVE,
+	KBF_PLUTORESTARTONCRASH,
+	KBF_CRLCHECKINTERVAL,
 	KBF_KLIPSDEBUG,
 	KBF_PLUTODEBUG,
 	KBF_NHELPERS,
@@ -111,15 +99,13 @@ enum keyword_numeric_config_field {
 	KBF_DPDTIMEOUT,
 	KBF_METRIC,
 	KBF_PHASE2,
+	KBF_AUTHBY,
 	KBF_KEYEXCHANGE,
 	KBF_AUTO,
 	KBF_PFS,
 	KBF_SHA2_TRUNCBUG,
-	KBF_MSDH_DOWNGRADE,
-	KBF_DNS_MATCH_ID,
 	KBF_SALIFETIME,
 	KBF_REKEY,
-	KBF_REAUTH,
 	KBF_REKEYMARGIN,
 	KBF_REKEYFUZZ,
 	KBF_COMPRESS,
@@ -129,19 +115,15 @@ enum keyword_numeric_config_field {
 	KBF_IKELIFETIME,
 	KBF_SHUNTLIFETIME,
 	KBF_RETRANSMIT_TIMEOUT,
-	KBF_RETRANSMIT_INTERVAL_MS,
+	KBF_RETRANSMIT_INTERVAL,
 	KBF_AGGRMODE,
 	KBF_MODECONFIGPULL,
-	KBF_ENCAPS,
+	KBF_FORCEENCAP,
 	KBF_IKEv2,
-	KBF_PPK,
 	KBF_ESN,
-	KBF_DECAP_DSCP,
-	KBF_NOPMTUDISC,
 	KBF_IKEv2_ALLOW_NARROWING,
 	KBF_IKEv2_PAM_AUTHORIZE,
-	KBF_HOSTADDRFAMILY,
-	KBF_CLIENTADDRFAMILY,
+	KBF_CONNADDRFAMILY,
 	KBF_FORCEBUSY, /* obsoleted for KBF_DDOS_MODE */
 	KBF_DDOS_IKE_THRESHOLD,
 	KBF_MAX_HALFOPEN_IKE,
@@ -149,7 +131,7 @@ enum keyword_numeric_config_field {
 	KBF_REMOTEPEERTYPE,     /* Cisco interop: remote peer type */
 	KBF_NMCONFIGURED,       /* Network Manager support */
 	KBF_LABELED_IPSEC,
-	KBF_SAREFTRACK,         /* saref tracking parameter for _updown */
+	KBF_SAREFTRACK,         /* saref tracking paramter for _updown */
 	KBF_WARNIGNORE,         /* to ignore obsoleted keywords */
 	KBF_SECCTX,             /* security context attribute value for labeled ipsec */
 	KBF_XAUTHBY,            /* method of xauth user auth - file, pam or alwaysok */
@@ -166,10 +148,8 @@ enum keyword_numeric_config_field {
 	KBF_NFLOG_ALL,		/* Enable global nflog device */
 	KBF_NFLOG_CONN,		/* Enable per-conn nflog device */
 	KBF_DDOS_MODE,		/* set DDOS mode */
-	KBF_SECCOMP,		/* set SECCOMP mode */
 	KBF_VTI_ROUTING,	/* let updown do routing into VTI device */
 	KBF_VTI_SHARED,		/* VTI device is shared - enable checks and disable cleanup */
-	KBF_NIC_OFFLOAD,	/* xfrm offload to network device */
 	KBF_MAX
 };
 
@@ -190,7 +170,6 @@ enum keyword_string_conn_field {
 	KSCF_NEXTHOP, /* loose_enum */
 	KSCF_UPDOWN,
 	KSCF_ID,
-	KSCF_AUTHBY, /* formerly enum */
 	KSCF_RSAKEY1, /* loose_enum */
 	KSCF_RSAKEY2, /* loose_enum */
 	KSCF_CERT,
@@ -198,12 +177,12 @@ enum keyword_string_conn_field {
 	KSCF_CA,
 	KSCF_PROTOPORT,
 	KSCF_SOURCEIP,
-	KSCF_VTI_IP,
 	KSCF_USERNAME,
 	KSCF_SUBNETS,
 	KSCF_ADDRESSPOOL,
-	KSCF_MODECFGDNS,
-	KSCF_MODECFGDOMAINS,
+	KSCF_MODECFGDNS1,
+	KSCF_MODECFGDNS2,
+	KSCF_MODECFGDOMAIN,
 	KSCF_MODECFGBANNER,
 	KSCF_IKE,
 	KSCF_ESP,
@@ -234,7 +213,6 @@ enum keyword_numeric_conn_field {
 	KNCF_SPI,
 	KNCF_ESPREPLAYWINDOW,
 	KNCF_SENDCERT,
-	KNCF_AUTH,
 	KNCF_MAX
 };
 
@@ -251,6 +229,8 @@ enum keyword_valid {
 	kv_config = LELEM(0),           /* may be present in config section */
 	kv_conn   = LELEM(1),           /* may be present in conn section */
 	kv_leftright = LELEM(2),        /* comes in leftFOO and rightFOO varients */
+	kv_auto   = LELEM(3),           /* valid when keyingtype=auto */
+	kv_manual = LELEM(4),           /* valid when keyingtype=manual */
 	kv_alias  = LELEM(5),           /* is an alias for another keyword */
 	kv_policy = LELEM(6),           /* is a policy affecting verb, processed specially */
 	kv_processed = LELEM(7),        /* is processed, do not output literal string */
@@ -316,7 +296,6 @@ enum keyword_type {
 	kt_invertbool,          /* value is an off/on type ("disable") */
 	kt_enum,                /* value is from a set of key words */
 	kt_list,                /* a set of values from a set of key words */
-	kt_lset,		/* a set of values from an enum name */
 	kt_loose_enum,          /* either a string, or a %-prefixed enum */
 	kt_rsakey,              /* a key, or set of values */
 	kt_number,              /* an integer */
@@ -327,10 +306,12 @@ enum keyword_type {
 	kt_subnet,              /* an IP address subnet */
 	kt_idtype,              /* an ID type */
 	kt_bitstring,           /* an encryption/authentication key */
-	kt_comment,             /* a value that is a cooked comment */
+	kt_comment,             /* a value which is a cooked comment */
 	kt_obsolete,            /* option that is obsoleted, allow keyword but warn and ignore */
 	kt_obsolete_quiet,      /* option that is obsoleted, allow keyword but don't bother warning */
 };
+
+#define NOT_ENUM NULL
 
 struct keyword_def {
 	const char        *keyname;
@@ -338,7 +319,6 @@ struct keyword_def {
 	enum keyword_type type;
 	unsigned int field;             /* one of keyword_*_field */
 	const struct keyword_enum_values *validenum;
-	const struct lmod_info *info;
 };
 
 struct keyword {
@@ -383,9 +363,8 @@ struct config_parsed {
 	struct section_list conn_default;
 };
 
-extern const struct keyword_def ipsec_conf_keywords[];
+extern const struct keyword_def ipsec_conf_keywords_v2[];
 
-extern lset_t parser_lset(const struct keyword_def *kd, const char *s);
 extern unsigned int parser_enum_list(const struct keyword_def *kd, const char *s,
 				     bool list);
 extern unsigned int parser_loose_enum(struct keyword *k, const char *s);

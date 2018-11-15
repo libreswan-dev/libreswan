@@ -7,7 +7,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -26,36 +26,36 @@ from fab import stats
 from fab import skip
 from fab import ignore
 from fab import timing
-from fab import publish
 
 def main():
     parser = argparse.ArgumentParser(description="Run tests")
 
     parser.add_argument("--verbose", "-v", action="count", default=0)
+    parser.add_argument("--dry-run", "-n", action="store_true")
 
     parser.add_argument("directories", metavar="DIRECTORY", nargs="+",
                         help="a testsuite directory, a TESTLIST file, or a list of test directories")
     testsuite.add_arguments(parser)
     runner.add_arguments(parser)
+    post.add_arguments(parser)
     logutil.add_arguments(parser)
     skip.add_arguments(parser)
     ignore.add_arguments(parser)
-    publish.add_arguments(parser)
 
-    # These three calls go together
     args = parser.parse_args()
-    logutil.config(args, sys.stdout)
-    logger = logutil.getLogger("kvmrunner")
+    logutil.config(args)
 
+    logger = logutil.getLogger("kvmrunner")
     logger.info("Options:")
     logger.info("  directories: %s", args.directories)
     logger.info("  verbose: %s", args.verbose)
+    logger.info("  dry-run: %s", args.dry_run)
     testsuite.log_arguments(logger, args)
     runner.log_arguments(logger, args)
+    post.log_arguments(logger, args)
     logutil.log_arguments(logger, args)
     skip.log_arguments(logger, args)
     ignore.log_arguments(logger, args)
-    publish.log_arguments(logger, args)
 
     tests = testsuite.load_testsuite_or_tests(logger, args.directories, args,
                                               log_level=logutil.INFO)

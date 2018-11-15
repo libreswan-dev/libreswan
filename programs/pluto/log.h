@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -21,24 +21,33 @@
 
 #include <libreswan.h>
 
-#include "lswcdefs.h"
 #include "lswlog.h"
-#include "fd.h"
 
-struct state;
-struct connection;
+#ifndef PERPERRLOGDIR
+#define PERPERRLOGDIR "/var/log/pluto/peer"
+#endif
 
 /* moved common code to library file */
 #include "libreswan/passert.h"
 
 extern bool
+	log_to_perpeer,         /* should log go to per-IP file? */
+	log_to_audit,         /* audit logs for kernel/auditd */
 	log_with_timestamp,     /* prefix timestamp */
-	log_append,
-	log_ip;
+	log_append;
 
-extern bool log_to_syslog;          /* should log go to syslog? */
+extern char *base_perpeer_logdir;
 extern char *pluto_log_file;
 extern char *pluto_stats_binary;
+
+/* used in some messages to distiguish
+ * which pluto is which, when doing
+ * unit testing
+ */
+extern const char *pluto_ifn_inst;
+
+/* maximum number of files to keep open for per-peer log files */
+#define MAX_PEERLOG_COUNT 16
 
 /* Context for logging.
  *
@@ -48,107 +57,82 @@ extern char *pluto_stats_binary;
  * If the context provides a whack file descriptor, messages
  * should be copied to it -- see whack_log()
  */
-extern fd_t whack_log_fd;                        /* only set during whack_handle() */
+extern int whack_log_fd;                        /* only set during whack_handle() */
+extern struct state *cur_state;                 /* current state, for diagnostics */
+extern struct connection *cur_connection;       /* current connection, for diagnostics */
+extern const ip_address *cur_from;              /* source of current current message */
+extern u_int16_t cur_from_port;                 /* host order */
 
-extern bool whack_prompt_for(fd_t whackfd,
+extern bool whack_prompt_for(int whackfd,
 			     const char *prompt1,
 			     const char *prompt2,
 			     bool echo,
 			     char *ansbuf, size_t ansbuf_len);
 
+extern void passert_fail(const char *pred_str,
+			 const char *file_str,
+			 unsigned long line_no) NEVER_RETURNS;
+
 /* for pushing state to other subsystems */
 extern void log_state(struct state *st, enum state_kind state);
 
-extern void set_debugging(lset_t deb);
-extern void reset_debugging(void);
+extern void extra_debugging(const struct connection *c);
 
-extern lset_t base_debugging;	/* bits selecting what to report */
+#define reset_debugging() { set_debugging(base_debugging); }
 
-extern void log_reset_globals(const char *func, const char *file, long line);
-#define reset_globals() log_reset_globals(__func__, PASSERT_BASENAME, __LINE__)
+#define GLOBALS_ARE_RESET() (whack_log_fd == NULL_FD \
+			      && cur_state == NULL \
+			      && cur_connection == NULL \
+			      && cur_from == NULL \
+			      && cur_debugging == base_debugging)
 
-extern void log_pexpect_reset_globals(const char *func, const char *file, long line);
-#define pexpect_reset_globals() log_pexpect_reset_globals(__func__, PASSERT_BASENAME, __LINE__)
+#define reset_globals() { \
+		whack_log_fd = NULL_FD; \
+		cur_state = NULL; \
+		cur_from = NULL; \
+		reset_cur_connection(); \
+}
 
-struct connection *log_push_connection(struct connection *c, const char *func,
-				       const char *file, long line);
-void log_pop_connection(struct connection *c, const char *func,
-			const char *file, long line);
+#define set_cur_connection(c) { \
+		cur_connection = (c); \
+		extra_debugging(c); \
+}
 
-#define push_cur_connection(C) log_push_connection(C, __func__, PASSERT_BASENAME, __LINE__)
-#define pop_cur_connection(C) log_pop_connection(C, __func__, PASSERT_BASENAME, __LINE__)
+#define reset_cur_connection() { \
+		cur_connection = NULL; \
+		reset_debugging(); \
+}
 
-so_serial_t log_push_state(struct state *st, const char *func,
-			   const char *file, long line);
-void log_pop_state(so_serial_t serialno, const char *func,
-		   const char *file, long line);
+#define set_cur_state(s) { \
+		cur_state = (s); \
+		extra_debugging((s)->st_connection); \
+}
 
-#define push_cur_state(ST) log_push_state(ST, __func__, PASSERT_BASENAME, __LINE__)
-#define pop_cur_state(ST) log_pop_state(ST, __func__, PASSERT_BASENAME, __LINE__)
-
-#define set_cur_connection(C) push_cur_connection(C)
-#define reset_cur_connection() pop_cur_connection(NULL)
-#define set_cur_state(ST) push_cur_state(ST)
-#define reset_cur_state() pop_cur_state(SOS_NOBODY)
-
-extern ip_address log_push_from(ip_address new_from, const char *func,
-				const char *file, long line);
-extern void log_pop_from(ip_address old_from, const char *func,
-			 const char *file, long line);
-
-#define push_cur_from(NEW)					\
-	log_push_from(NEW, __func__, PASSERT_BASENAME, __LINE__)
-#define pop_cur_from(OLD)						\
-	log_pop_from(OLD, __func__, PASSERT_BASENAME, __LINE__)
-
-
-/*
- * Log 'cur' directly (without setting it first).
- */
-
-void log_prefix(struct lswlog *buf, bool debug,
-		struct state *st, struct connection *c);
-
-#define LSWLOG_STATE(STATE, BUF)					\
-	LSWLOG_(true, BUF,						\
-		log_prefix(BUF, false, STATE, NULL),			\
-		lswlog_to_default_streams(BUF, RC_LOG))
-
-#define LSWLOG_CONNECTION(CONNECTION, BUF)				\
-	LSWLOG_(true, BUF,						\
-		log_prefix(BUF, true, NULL, CONNECTION),		\
-		lswlog_to_default_streams(BUF, RC_LOG))
-
-bool log_debugging(struct state *st, struct connection *c, lset_t predicate);
-
-#define LSWDBGP_STATE(DEBUG, STATE, BUF)				\
-	LSWLOG_(log_debugging(STATE, NULL, DEBUG), BUF,			\
-		log_prefix(BUF, true, STATE, NULL),			\
-		lswlog_to_debug_stream(BUF))
-
-#define LSWDBGP_CONNECTION(DEBUG, CONNECTION, BUF)			\
-	LSWLOG_(log_debugging(NULL, CONNECTION, DEBUG), BUF,		\
-		log_prefix(BUF, true, NULL, CONNECTION),		\
-		lswlog_to_debug_stream(BUF))
+#define reset_cur_state() { \
+		cur_state = NULL; \
+		reset_debugging(); \
+}
 
 extern void pluto_init_log(void);
 extern void close_log(void);
 extern void exit_log(const char *message, ...) PRINTF_LIKE(1) NEVER_RETURNS;
 
-/*
- * struct lswlog primitives
- */
-bool whack_log_p(void);
-void whack_log_pre(enum rc_type rc, struct lswlog *buf);
+/* close of all per-peer logging */
+extern void close_peerlog(void);
 
-void whack_log(enum rc_type rc, const char *message, ...) PRINTF_LIKE(2);
-/*
- * Like whack_log() but suppress the 'NNN ' prefix.
- */
-void whack_log_comment(const char *message, ...) PRINTF_LIKE(1);
+/* free all per-peer log resources */
+extern void perpeer_logfree(struct connection *c);
+
+extern void whack_log(int mess_no, const char *message, ...) PRINTF_LIKE(2);
 
 /* show status, usually on whack log */
 extern void show_status(void);
+
+/*
+ * call this routine to reset daily items.
+ */
+extern void daily_log_reset(void);
+extern void daily_log_event(void);
 
 extern void show_setup_plutomain(void);
 extern void show_setup_natt(void);
@@ -178,5 +162,12 @@ extern void linux_audit(const int type, const char *message,
 			const char *addr, const int result);
 extern void linux_audit_conn(const struct state *st, enum linux_audit_kind);
 #endif
+
+/*
+ * some events are to be logged only occasionally.
+ */
+extern bool logged_txt_warning;
+extern bool logged_myid_ip_txt_warning;
+extern bool logged_myid_fqdn_txt_warning;
 
 #endif /* _PLUTO_LOG_H */

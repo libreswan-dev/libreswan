@@ -3,12 +3,12 @@
 # Collect test statistics
 #
 # Copyright (C) 2015-2016 Andrew Cagney <cagney@gnu.org>
-#
+# 
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
-#
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# 
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
@@ -69,41 +69,26 @@ class Tests(Counts):
     def add(self, test, *stats):
         Counts.add(self, test.name, *stats)
 
-# Record results:
-#
-# total/{passed,failed,ignored,unresolved} must add up
 
 class Results(Counts):
 
+    def add_ignored(self, test, reason):
+        Counts.add(self, test.name, "total")
+        Counts.add(self, test.name, "ignored")
+        Counts.add(self, test.name, "ignored", reason)
+
     def count_result(self, result):
         Counts.add(self, result.test.name, "total")
-        Counts.add(self, result.test.name, "total", str(result))
-        Counts.add(self, result.test.name, "total", str(result), result.test.status)
-        # details
-        for issue in result.issues:
-            for domain in result.issues[issue]:
-                Counts.add(self, result.test.name, "total", str(result),
-                           result.test.status, issue, domain=domain)
-
-    def count_previous(self, result, previous):
-        Counts.add(self, previous.test.name,
-                   "status", previous.test.status,
-                   result, "previous=" + str(previous))
-
-    def add_ignored(self, test, reason):
-        """The test has been excluded from the test run"""
-        Counts.add(self, test.name, "total")
-        Counts.add(self, test.name, "total", "ignored")
-        Counts.add(self, test.name,
-                   "status", test.status,
-                   "ignored", reason)
+        Counts.add(self, result.test.name, str(result))
+        for domain, errors in result.errors.items():
+            for error in errors:
+                Counts.add(self, result.test.name, str(result), error, domain=domain)
 
     def add_skipped(self, result):
-        """The test wasn't run; log the previous result"""
+        Counts.add(self, result.test.name, "skipped", str(result))
         self.count_result(result)
-        self.count_previous("skipped", result)
 
     def add_result(self, result, old_result=None):
         self.count_result(result)
         if old_result:
-            self.count_previous(str(result), old_result)
+            Counts.add(self, result.test.name, str(result), "previous", str(old_result))

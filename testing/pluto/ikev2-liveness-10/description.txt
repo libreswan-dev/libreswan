@@ -1,4 +1,0 @@
-liveness with adpdactin=restart, %any on east and NAT.
-
-So this is argubally a misconfiguration. It is to test corner case of
-responder restarting an connection, CK_INSTANCE.

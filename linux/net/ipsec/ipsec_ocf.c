@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -96,7 +96,7 @@ static void ipsec_ocf_queue_init(void)
 {
 	skb_queue_head_init(&ipsec_ocf_skbq);
 	tasklet_init(&ipsec_ocf_task, ipsec_ocf_skbq_process,
-		     0ul);
+		     (unsigned long) 0);
 }
 
 #define ipsec_ocf_queue_task(func, this) \
@@ -613,7 +613,7 @@ enum ipsec_rcv_value ipsec_ocf_rcv(struct ipsec_rcv_state *irs)
 	case IPPROTO_ESP:
 		/*
 		 * we are decrypting,  from the setup in ipsec_ocf_sa_init above,  we
-		 * need to flip the order of hash/cipher for receive so that it is
+		 * need to flip the order of hash/cipher for recieve so that it is
 		 * hash first then decrypt.  Transmit is ok.
 		 */
 		if (crp->crp_desc && crp->crp_desc->crd_next) {

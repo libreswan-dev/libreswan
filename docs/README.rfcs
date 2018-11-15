@@ -1,11 +1,11 @@
 
 An IPsec roadmap is released as RFC 6071, which lists a lot of relevant RFCs
 
-https://tools.ietf.org/html/rfc6071/
+http://tools.ietf.org/html/rfc6071/
 
 To search for IPsec related RFCs and drafts, see:
 
-https://datatracker.ietf.org/doc/search/?name=ipsec&rfcs=on&activeDrafts=on&oldDrafts=on
+http://datatracker.ietf.org/doc/search/?name=ipsec&rfcs=on&activeDrafts=on&oldDrafts=on
 
 IPsec related RFC's and drafts (list will likely be out of date):
 
@@ -49,7 +49,7 @@ RFC 1918	Address Allocation for Private Internets
 RFC 1984	IAB and IESG Statement on Cryptographic Technology and the Internet
 RFC 2144	The CAST-128 Encryption Algorithm
 RFC 3457	Requirements for IPsec Remote Access Scenarios
-RFC 3585	IPsec Configuration Policy Information Model
+RFC 3585	IPsec Configuration Policy Information Model  	
 
 Detailed RFC's on specific cryptograhpic algorithms and ciphers
 

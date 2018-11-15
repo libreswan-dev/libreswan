@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -49,7 +49,7 @@
 #define __exit
 #endif
 
-/*	Low Libreswan header coupling	*/
+/*	Low freeswan header coupling	*/
 #include <libreswan.h>
 #include "libreswan/ipsec_alg.h"
 #include "klips-crypto/aes_cbc.h"
@@ -101,7 +101,7 @@ module_param(auth_id, int, 0664);
 #endif
 #endif
 
-#define ESP_AES                 12      /* truly _constant_  :)  */
+#define ESP_AES                 12      /* truely _constant_  :)  */
 
 /* 128, 192 or 256 */
 #define ESP_AES_KEY_SZ_MIN      16      /* 128 bit secret key */

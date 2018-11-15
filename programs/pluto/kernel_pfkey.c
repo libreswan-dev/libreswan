@@ -13,12 +13,11 @@
  * Copyright (C) 2012 Roel van Meer <roel.vanmeer@bokxing.nl>
  * Copyright (C) 2013 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
- * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -26,6 +25,8 @@
  * for more details.
  *
  */
+
+#ifdef PFKEY
 
 #include <errno.h>
 #include <fcntl.h>
@@ -54,7 +55,6 @@
 #include "connections.h"
 #include "state.h"
 #include "kernel.h"
-#include "kernel_sadb.h"
 #include "kernel_pfkey.h"
 #include "timer.h"
 #include "log.h"
@@ -65,14 +65,13 @@
 #include "lsw_select.h"
 #include "alg_info.h"
 #include "kernel_alg.h"
-#include "ip_address.h"
 
 #define KLIPS_OP_MASK   0xFF
 #define KLIPS_OP_FLAG_SHIFT     8
 
 int pfkeyfd = NULL_FD;
 
-typedef uint32_t pfkey_seq_t;
+typedef u_int32_t pfkey_seq_t;
 static pfkey_seq_t pfkey_seq = 0;       /* sequence number for our PF_KEY messages */
 
 
@@ -192,14 +191,14 @@ void init_pfkey(void)
 	pfkeyfd = safe_socket(PF_KEY, SOCK_RAW, PF_KEY_V2);
 
 	if (pfkeyfd == -1)
-		EXIT_LOG_ERRNO(errno, "socket() in init_pfkeyfd()");
+		exit_log_errno((e, "socket() in init_pfkeyfd()"));
 
 #ifdef NEVER    /* apparently unsupported! */
 	if (fcntl(pfkeyfd, F_SETFL, O_NONBLOCK) != 0)
-		EXIT_LOG_ERRNO(errno, "fcntl(O_NONBLOCK) in init_pfkeyfd()");
+		exit_log_errno((e, "fcntl(O_NONBLOCK) in init_pfkeyfd()"));
 #endif
 	if (fcntl(pfkeyfd, F_SETFD, FD_CLOEXEC) != 0)
-		EXIT_LOG_ERRNO(errno, "fcntl(FD_CLOEXEC) in init_pfkeyfd()");
+		exit_log_errno((e, "fcntl(FD_CLOEXEC) in init_pfkeyfd()"));
 
 	DBG(DBG_KERNEL,
 	    DBG_log("process %u listening for PF_KEY_V2 on file descriptor %d",
@@ -259,7 +258,7 @@ static bool pfkey_input_ready(void)
 	} while (ndes == -1 && errno == EINTR);
 
 	if (ndes < 0) {
-		LOG_ERRNO(errno, "select() failed in pfkey_get()");
+		log_errno((e, "select() failed in pfkey_get()"));
 		return FALSE;
 	}
 
@@ -294,7 +293,7 @@ static bool pfkey_get(pfkey_buf *buf)
 			if (errno == EAGAIN)
 				return FALSE;
 
-			LOG_ERRNO(errno, "read() failed in pfkey_get()");
+			log_errno((e, "read() failed in pfkey_get()"));
 			return FALSE;
 		} else if ((size_t) len < sizeof(buf->msg)) {
 			libreswan_log(
@@ -385,7 +384,7 @@ void pfkey_register_response(const struct sadb_msg *msg)
 	switch (msg->sadb_msg_satype) {
 	case K_SADB_SATYPE_AH:
 	case K_SADB_SATYPE_ESP:
-		kernel_add_sadb_algs(msg, PFKEYv2_MAX_MSGSIZE);
+		kernel_alg_register_pfkey(msg);
 		break;
 	case K_SADB_X_SATYPE_COMP:
 		/* ??? There ought to be an extension to list the
@@ -461,84 +460,6 @@ static void process_pfkey_acquire(pfkey_buf *buf,
 	if (ugh != NULL)
 		libreswan_log("K_SADB_ACQUIRE message from KLIPS malformed: %s", ugh);
 
-}
-
-struct new_klips_mapp_nfo {
-	struct k_sadb_sa *sa;
-	ip_address src, dst;
-	uint16_t sport, dport;
-};
-
-static void nat_t_new_klips_mapp(struct state *st, void *data)
-{
-	struct new_klips_mapp_nfo *nfo = (struct new_klips_mapp_nfo *)data;
-
-	if (st->st_esp.present &&
-	    sameaddr(&st->st_remoteaddr, &nfo->src) &&
-	    st->st_esp.our_spi == nfo->sa->sadb_sa_spi) {
-		nat_traversal_new_mapping(st, &nfo->dst, nfo->dport);
-	}
-}
-
-static void process_pfkey_nat_t_new_mapping(struct sadb_msg *msg UNUSED,
-					    struct sadb_ext *extensions[K_SADB_EXT_MAX + 1])
-{
-	struct new_klips_mapp_nfo nfo;
-	struct sadb_address *srcx =
-		(void *) extensions[K_SADB_EXT_ADDRESS_SRC];
-	struct sadb_address *dstx =
-		(void *) extensions[K_SADB_EXT_ADDRESS_DST];
-	struct sockaddr *srca, *dsta;
-	err_t ugh = NULL;
-
-	nfo.sa = (void *) extensions[K_SADB_EXT_SA];
-
-	if (!nfo.sa || !srcx || !dstx) {
-		libreswan_log("K_SADB_X_NAT_T_NEW_MAPPING message from KLIPS malformed: got NULL params");
-		return;
-	}
-
-	srca = ((struct sockaddr *)(void *)&srcx[1]);
-	dsta = ((struct sockaddr *)(void *)&dstx[1]);
-
-	if (srca->sa_family != AF_INET || dsta->sa_family != AF_INET) {
-		ugh = "only AF_INET supported";
-	} else {
-		initaddr(
-			(const void *) &((const struct sockaddr_in *)srca)->sin_addr,
-			sizeof(((const struct sockaddr_in *)srca)->sin_addr),
-			srca->sa_family, &nfo.src);
-		nfo.sport =
-			ntohs(((const struct sockaddr_in *)srca)->sin_port);
-		initaddr(
-			(const void *) &((const struct sockaddr_in *)dsta)->sin_addr,
-			sizeof(((const struct sockaddr_in *)dsta)->sin_addr),
-			dsta->sa_family, &nfo.dst);
-		nfo.dport =
-			ntohs(((const struct sockaddr_in *)dsta)->sin_port);
-
-		DBG(DBG_NATT, {
-			char text_said[SATOT_BUF];
-			ip_said said;
-			ipstr_buf bs;
-			ipstr_buf bd;
-
-			initsaid(&nfo.src, nfo.sa->sadb_sa_spi, SA_ESP,
-				&said);
-			satot(&said, 0, text_said, SATOT_BUF);
-			DBG_log("new klips mapping %s %s:%d %s:%d",
-				text_said,
-				ipstr(&nfo.src, &bs), nfo.sport,
-				ipstr(&nfo.dst, &bd), nfo.dport);
-		});
-
-		for_each_state(nat_t_new_klips_mapp, &nfo);
-	}
-
-	if (ugh != NULL)
-		libreswan_log(
-			"K_SADB_X_NAT_T_NEW_MAPPING message from KLIPS malformed: %s",
-			ugh);
 }
 
 /* Handle PF_KEY messages from the kernel that are not dealt with
@@ -625,7 +546,7 @@ void pfkey_dequeue(void)
 }
 
 /* asynchronous messages directly from PF_KEY socket */
-void pfkey_event(int fd UNUSED)
+void pfkey_event(void)
 {
 	pfkey_buf buf;
 
@@ -649,8 +570,8 @@ static bool pfkey_build(int error,
 }
 
 /* pfkey_extensions_init + pfkey_build + pfkey_msg_hdr_build */
-static bool pfkey_msg_start(uint8_t msg_type,
-			    uint8_t satype,
+static bool pfkey_msg_start(u_int8_t msg_type,
+			    u_int8_t satype,
 			    const char *description,
 			    const char *text_said,
 			    struct sadb_ext *extensions[K_SADB_EXT_MAX + 1])
@@ -662,7 +583,7 @@ static bool pfkey_msg_start(uint8_t msg_type,
 }
 
 /* pfkey_build + pfkey_address_build */
-static bool pfkeyext_address(uint16_t exttype,
+static bool pfkeyext_address(u_int16_t exttype,
 			     const ip_address *address,
 			     const char *description,
 			     const char *text_said,
@@ -747,24 +668,24 @@ static bool finish_pfkey_msg(struct sadb_ext *extensions[K_SADB_EXT_MAX + 1],
 					/* FALL THROUGH */
 					default:
 logerr:
-						LOG_ERRNO(e1,
-							  "pfkey write() of %s message %u for %s %s failed",
-							  sparse_val_show(
-								  pfkey_type_names,
-								  pfkey_msg->sadb_msg_type),
-							  pfkey_msg->sadb_msg_seq,
-							  description,
-							  text_said);
+						libreswan_log_errno_routine(e1,
+							"pfkey write() of %s message %u for %s %s failed",
+							sparse_val_show(
+								pfkey_type_names,
+								pfkey_msg->sadb_msg_type),
+							pfkey_msg->sadb_msg_seq,
+							description,
+							text_said);
 						success = FALSE;
 					}
 				} else {
 					loglog(RC_LOG_SERIOUS,
-					       "ERROR: pfkey write() of %s message %u for %s %s truncated: %zd instead of %zu",
+					       "ERROR: pfkey write() of %s message %u for %s %s truncated: %ld instead of %ld",
 					       sparse_val_show(pfkey_type_names,
 							pfkey_msg->sadb_msg_type),
 					       pfkey_msg->sadb_msg_seq,
 					       description, text_said,
-					       r, len);
+					       (long)r, (long)len);
 					success = FALSE;
 				}
 
@@ -828,7 +749,6 @@ logerr:
 	return success;
 }
 
-#ifdef KLIPS
 /*  register SA types that can be negotiated */
 static void pfkey_register_proto(unsigned int sadb_register,
 				 unsigned satype, const char *satypename)
@@ -849,9 +769,17 @@ static void pfkey_register_proto(unsigned int sadb_register,
 	}
 }
 
+#ifdef KLIPS
 void klips_register_proto(unsigned satype, const char *satypename)
 {
 	return pfkey_register_proto(K_SADB_REGISTER, satype, satypename);
+}
+#endif
+
+#ifdef NETKEY_SUPPORT
+void netlink_register_proto(unsigned satype, const char *satypename)
+{
+	return pfkey_register_proto(SADB_REGISTER, satype, satypename);
 }
 #endif
 
@@ -918,7 +846,7 @@ bool pfkey_raw_eroute(const ip_address *this_host,
 		      const ip_subnet *this_client,
 		      const ip_address *that_host,
 		      const ip_subnet *that_client,
-		      ipsec_spi_t cur_spi UNUSED,
+		      ipsec_spi_t cur_spi,
 		      ipsec_spi_t new_spi,
 		      int sa_proto UNUSED,
 		      unsigned int transport_proto,
@@ -955,11 +883,25 @@ bool pfkey_raw_eroute(const ip_address *this_host,
 	setportof(dport ? ~0 : 0, &dmask_ska);
 
 	satype = eroute_type_to_pfkey_satype(esatype);
-	passert(!(satype < 0 || satype > K_SADB_SATYPE_MAX));
+	if (satype < 0 || satype > K_SADB_SATYPE_MAX) {
+		impossible();
+		return FALSE;
+	}
 
 	if (!pfkey_msg_start(klips_op & KLIPS_OP_MASK, satype,
 			     "pfkey_msg_hdr flow", text_said, extensions))
 		return FALSE;
+
+#if 0
+	DBG_log("klips pfkey op = %u / %u (ERO_DELETE=%u)", op, klips_op,
+		ERO_DELETE);
+#endif
+
+
+// temp squash a warning
+
+	DBG(DBG_CONTROL, DBG_log(" useless SPI printing for cur(%d) and new(%d) spi",
+		cur_spi, new_spi));
 
 	if (op != ERO_DELETE) {
 		if (!(pfkey_build(pfkey_sa_build(&extensions[K_SADB_EXT_SA],
@@ -1021,7 +963,10 @@ bool pfkey_add_sa(const struct kernel_sa *sa, bool replace)
 	bool success = FALSE;
 
 	klips_satype = eroute_type_to_pfkey_satype(sa->esatype);
-	passert(!(klips_satype > K_SADB_SATYPE_MAX));
+	if (klips_satype > K_SADB_SATYPE_MAX) {
+		impossible();
+		return FALSE;
+	}
 
 	success = pfkey_msg_start(replace ? K_SADB_UPDATE : K_SADB_ADD,
 				  klips_satype,
@@ -1036,7 +981,7 @@ bool pfkey_add_sa(const struct kernel_sa *sa, bool replace)
 					     sa->spi,   /* in network order */
 					     sa->replay_window,
 					     K_SADB_SASTATE_MATURE,
-					     sa->authalg, sa->compalg, 0),
+					     sa->authalg, sa->encalg, 0),
 			      "pfkey_sa Add SA", sa->text_said, extensions);
 	if (!success)
 		return FALSE;
@@ -1191,10 +1136,16 @@ bool pfkey_grp_sa(const struct kernel_sa *sa0, const struct kernel_sa *sa1)
 	unsigned klips_satype0, klips_satype1;
 
 	klips_satype0 = eroute_type_to_pfkey_satype(sa0->esatype);
-	passert(!(klips_satype0 > K_SADB_SATYPE_MAX));
+	if (klips_satype0 > K_SADB_SATYPE_MAX) {
+		impossible();
+		return FALSE;
+	}
 
 	klips_satype1 = eroute_type_to_pfkey_satype(sa1->esatype);
-	passert(!(klips_satype1 > K_SADB_SATYPE_MAX));
+	if (klips_satype1 > K_SADB_SATYPE_MAX) {
+		impossible();
+		return FALSE;
+	}
 
 	return pfkey_msg_start(K_SADB_X_GRPSA, klips_satype1,
 			       "pfkey_msg_hdr group", sa1->text_said,
@@ -1255,70 +1206,6 @@ bool pfkey_del_sa(const struct kernel_sa *sa)
 
 	       && finish_pfkey_msg(extensions, "Delete SA", sa->text_said,
 				   NULL);
-}
-
-/*
- * pfkey_get_sa - Get SA information from the kernel
- *
- * @param sa Kernel SA to be queried
- * @param bytes octets processed by SA
- * @param add_time timestamp when SA was added
- * @return bool True if successful
- */
-bool pfkey_get_sa(const struct kernel_sa *sa, uint64_t *bytes,
-		  uint64_t *add_time)
-{
-	struct sadb_ext *extensions[K_SADB_EXT_MAX + 1];
-	pfkey_buf pfb;
-
-	if (! (pfkey_msg_start(K_SADB_GET, proto2satype(
-				       sa->proto),
-			       "pfkey_msg_hdr get SA", sa->text_said,
-			       extensions)
-
-	       && pfkey_build(pfkey_sa_build(&extensions[K_SADB_EXT_SA],
-					     K_SADB_EXT_SA,
-					     sa->spi, /* in host order */
-					     0, K_SADB_SASTATE_MATURE, 0, 0,
-					     0),
-			      "pfkey_sa get SA", sa->text_said, extensions)
-
-	       && pfkeyext_address(K_SADB_EXT_ADDRESS_SRC, sa->src,
-				   "pfkey_addr_s get SA", sa->text_said,
-				   extensions)
-
-	       && pfkeyext_address(K_SADB_EXT_ADDRESS_DST, sa->dst,
-				   "pfkey_addr_d get SA", sa->text_said,
-				   extensions)
-
-	       && finish_pfkey_msg(extensions, "Get SA", sa->text_said,
-				   &pfb) ))
-	{
-		return FALSE;
-	}
-
-	/* get reply */
-
-	/* extract the sa info */
-	struct sadb_ext *replies[K_SADB_EXT_MAX + 1];
-	int error;
-
-	error = pfkey_msg_parse(&pfb.msg, NULL, replies, EXT_BITS_IN);
-	if (error != 0)
-		libreswan_log("success on unparsable message - cannot happen");
-
-	if (replies[K_SADB_EXT_LIFETIME_CURRENT]) {
-		struct sadb_lifetime *sal = (struct sadb_lifetime *)
-			replies[K_SADB_EXT_LIFETIME_CURRENT];
-
-		/* *allocations = sal->sadb_lifetime_allocations; */
-		*bytes = sal->sadb_lifetime_bytes;
-		*add_time = sal->sadb_lifetime_addtime;
-		/* *use_time = sal->sadb_lifetime_usetime; */
-		/* *packets = sal->sadb_x_lifetime_packets; */
-		return TRUE;
-	}
-	return FALSE;
 }
 
 void pfkey_close(void)
@@ -1422,6 +1309,27 @@ bool pfkey_shunt_eroute(const struct connection *c,
 		}
 	}
 
+#if 0
+	{
+		enum pluto_sadb_operations inop =
+			op + ERO_ADD_INBOUND - ERO_ADD;
+
+		bool ok = pfkey_raw_eroute(&c->spd.that.host_addr,
+				      &c->spd.that.client,
+				      &c->spd.this.host_addr,
+				      &c->spd.this.client,
+				      htonl(spi),
+				      SA_INT,
+				      0,        /* transport_proto is not relevant */
+				      ET_INT, null_proto_info,
+				      0,        /* use lifetime */
+				      inop,
+				      opname);
+		if (!ok)
+			return FALSE;
+	}
+#endif
+
 	{
 		const ip_address *peer = &sr->that.host_addr;
 		char buf2[256];
@@ -1443,7 +1351,7 @@ bool pfkey_shunt_eroute(const struct connection *c,
 					ET_INT,
 					null_proto_info,
 					deltatime(0),
-					calculate_sa_prio(c),
+					c->sa_priority,
 					&c->sa_marks,
 					op, buf2
 #ifdef HAVE_LABELED_IPSEC
@@ -1516,9 +1424,8 @@ bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 		proto_info[i].reqid = reqid_ipcomp(sr->reqid);
 	}
 
-	if (i == elemsof(proto_info) - 1) {
-		PASSERT_FAIL("no transform at all (%d)!", i);
-	}
+	if (i == elemsof(proto_info) - 1)
+		impossible(); /* no transform at all! */
 
 	if (tunnel) {
 		int j;
@@ -1536,7 +1443,7 @@ bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 	return eroute_connection(sr,
 				 inner_spi, inner_spi, inner_proto,
 				 inner_esatype, proto_info + i,
-				 0 /* KLIPS does not support priority */, NULL, op, opname
+				 DEFAULT_IPSEC_SA_PRIORITY, NULL, op, opname
 #ifdef HAVE_LABELED_IPSEC
 				 , NULL
 #endif
@@ -1882,7 +1789,7 @@ bool pfkey_was_eroute_idle(struct state *st, deltatime_t idle_max)
 			char buf[1024];
 			char *line;
 			char text_said[SATOT_BUF];
-			uint8_t proto = 0;
+			u_int8_t proto = 0;
 			ip_address dst;
 			ip_said said;
 			ipsec_spi_t spi = 0;
@@ -1962,7 +1869,7 @@ void pfkey_set_debug(int cur_debug,
 		     libreswan_keying_debug_func_t debug_func,
 		     libreswan_keying_debug_func_t error_func)
 {
-	pfkey_lib_debug = (cur_debug & DBG_KERNEL ?
+	pfkey_lib_debug = (cur_debug & DBG_PFKEY ?
 			   PF_KEY_DEBUG_PARSE_MAX : PF_KEY_DEBUG_PARSE_NONE);
 
 	pfkey_debug_func = debug_func;
@@ -2018,3 +1925,5 @@ bool pfkey_plumb_mast_device(int mast_dev)
 	return TRUE;
 }
 #endif  /* KLIPS_MAST */
+
+#endif  /* PFKEY */

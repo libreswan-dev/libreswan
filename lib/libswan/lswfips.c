@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,18 +17,14 @@
  * for more details.
  */
 
+#ifdef FIPS_CHECK
+
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
 
 #include "lswlog.h"
 #include "lswfips.h"
-
-#ifdef FIPS_CHECK
-#define LSW_FIPS_DEFAULT LSW_FIPS_UNSET
-#else
-#define LSW_FIPS_DEFAULT LSW_FIPS_OFF
-#endif
 
 /*
  * Is the machine running in FIPS kernel mode (fips=1 kernel argument)
@@ -80,7 +76,7 @@ static enum lsw_fips_mode lsw_fipsproduct(void)
 	return LSW_FIPS_ON;
 }
 
-static enum lsw_fips_mode fips_mode = LSW_FIPS_DEFAULT;
+static enum lsw_fips_mode fips_mode = LSW_FIPS_UNSET;
 
 /*
  * Should only be called directly by plutomain.c
@@ -135,3 +131,5 @@ void lsw_set_fips_mode(enum lsw_fips_mode fips)
 {
 	fips_mode = fips;
 }
+
+#endif
