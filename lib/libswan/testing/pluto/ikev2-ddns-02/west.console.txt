@@ -1,0 +1,68 @@
+/testing/guestbin/swan-prep
+west #
+ ipsec start
+Redirecting to: systemctl start ipsec.service
+west #
+ /testing/pluto/bin/wait-until-pluto-started
+west #
+ cp resolv.conf /etc
+west #
+ # need to disable ipv6 and activate auto-interface
+west #
+ cp west-unbound.conf /etc/unbound/unbound.conf
+west #
+ # will throw an error about bad unresolvable name
+west #
+ ipsec auto --add named
+000 failed to convert 'right.libreswan.org' at load time: not a numeric IPv4 address and name lookup failed (no validation performed)
+002 added connection description "named"
+west #
+ echo "initdone"
+initdone
+west #
+ sleep 5
+west #
+ unbound-control-setup > /dev/null 2>&1
+west #
+ # use modified service file that skips ICANN root key checks
+west #
+ cat /lib/systemd/system/unbound.service | grep -v ExecStartPre > /etc/systemd/system/unbound.service
+west #
+ systemctl daemon-reload
+west #
+ systemctl start unbound.service
+west #
+ unbound-control local_data right.libreswan.org 3600 IN A 192.1.2.23
+ok
+west #
+ # wait for DDNS event
+west #
+ # Oddly designed connection_check_ddns will trigger --up
+west #
+ sleep 30
+west #
+ sleep 30
+west #
+ sleep 30
+west #
+ # tunnel should show up in final.sh
+west #
+ # seems to slow down/hang shutdown
+west #
+ rm /etc/resolv.conf
+west #
+ echo done
+done
+west #
+ ipsec whack --trafficstatus
+006 #2: "named", type=ESP, add_time=1234567890, inBytes=0, outBytes=0, id='@east'
+west #
+ # clean up after ourselves
+west #
+ rm -f /etc/systemd/system/unbound.service
+west #
+west #
+ ../bin/check-for-core.sh
+west #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+

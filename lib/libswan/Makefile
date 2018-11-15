@@ -1,10 +1,9 @@
-# Libreswan library
-
-# Copyright (C) 1998-2001  Henry Spencer.
-# Copyright (C) 2003, 2004 Xelerance Corporation
-# Copyright (C) 2012 Paul Wouters <pwouters@redhat.com>
-# Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
-# Copyright (C) 2015-2018 Andrew Cagney
+# Libreswan master makefile
+#
+# Copyright (C) 1998-2002  Henry Spencer.
+# Copyright (C) 2003-2004  Xelerance Corporation
+# Copyright (C) 2017, Richard Guy Briggs <rgb@tricolour.ca>
+# Copyright (C) 2015-2018  Andrew Cagney
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
@@ -15,203 +14,208 @@
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
 # for more details.
-
-#
-# XXX:
-#
-# Because libswan's Makefile tests USE_... variables, defined in
-# config.mk, using "ifeq", it needs to include that file early.
-#
-# Instead:
-#
-# - replace the code with '$(call if-enabled)'.
-#
-# - move the optional files to their own library?
 #
 
 ifndef top_srcdir
-include ../../mk/dirs.mk
-endif
-include $(top_srcdir)/mk/config.mk
-
-LIB = libswan.a
-
-OBJS += x509dn.o asn1.o oid.o
-
-OBJS += constants.o \
-	alloc.o diag.o \
-	id.o initaddr.o initsaid.o initsubnet.o \
-	iprange.o \
-        keyblobtoid.o \
-	lex.o \
-	lswconf.o \
-	lswfips.o \
-	rangetosubnet.o sameaddr.o \
-	secrets.o subnettot.o \
-	subnettypeof.o ttoaddr.o ttodata.o ttoprotoport.o \
-	ttorange.o ttosa.o ttosubnet.o ttoul.o \
-	secitem_chunk.o \
-	base64_pubkey.o \
-	lswnss.o \
-	lsw_passert_fail.o \
-	alg_byname.o
-
-ifeq ($(USE_NETKEY),true)
-OBJS += addr_lookup.o
+include mk/dirs.mk
 endif
 
-OBJS += fd.o
-OBJS += kernel_alg.o
-OBJS += kernel_sadb.o
+LIBRESWANSRCDIR?=$(shell pwd)
 
-# These get pulled in from the klips kernel code.
-VPATH += ${KLIPSSRCDIR}
-OBJS += addrtot.o
-OBJS += addrtypeof.o
-OBJS += anyaddr.o
-OBJS += datatot.o
-OBJS += goodmask.o
-OBJS += satot.o
-OBJS += ultot.o
+include ${LIBRESWANSRCDIR}/Makefile.inc
 
-OBJS += alg_info.o esp_info.o ike_info.o ah_info.o
+SRCDIR?=$(shell pwd)/
 
-OBJS += ckaid.o
+# dummy default rule
+def help:
+	@echo
+	@echo "To build and install on a recent Linux kernel that has NETKEY:"
+	@echo
+	@echo "   make all && sudo make install"
+	@echo
+	@echo "For a minimal install (no manpages) type:"
+	@echo
+	@echo "   make base && sudo make install-base"
+	@echo
+	@echo "See the files INSTALL and README for more general information,"
+	@echo "and details on how to build / install on KLIPS and other systems"
+	@echo
+	@echo "To build debian packages: make deb"
+	@echo "To build fedora/rhel/centos rpms, see packaging/"
+	@echo
+	@false
 
-OBJS += chunk.o
-OBJS += shunk.o
+.PHONY: def help
 
-OBJS += ip_address.o
+PATCHES=linux
+# where KLIPS goes in the kernel
+# note, some of the patches know the last part of this path
+KERNELKLIPS=$(KERNELSRC)/net/ipsec
+KERNELCRYPTODES=$(KERNELSRC)/crypto/ciphers/des
+KERNELLIBFREESWAN=$(KERNELSRC)/lib/libfreeswan
+KERNELLIBZLIB=$(KERNELSRC)/lib/zlib
+KERNELINCLUDE=$(KERNELSRC)/include
 
-OBJS += lmod.o
-OBJS += deltatime.o
-OBJS += realtime.o
-OBJS += monotime.o
+MAKEUTILS=packaging/utils
+ERRCHECK=${MAKEUTILS}/errcheck
+KVUTIL=${MAKEUTILS}/kernelversion
+KVSHORTUTIL=${MAKEUTILS}/kernelversion-short
 
-OBJS += debug.o
-OBJS += impair.o
-OBJS += keywords.o
+SUBDIRS?=lib programs initsystems testing
 
-OBJS += libreswan_DBG_dump.o
-OBJS += libreswan_DBG_log.o
-OBJS += libreswan_exit_log_errno.o
-OBJS += libreswan_log_errno.o
-OBJS += libreswan_pexpect.o
-OBJS += libreswan_pexpect_log.o
-OBJS += libreswan_bad_case.o
+TAGSFILES=$(wildcard include/*.h lib/lib*/*.[ch] programs/*/*.[ch] linux/include/*.h linux/include/libreswan/*.h linux/net/ipsec/*.[ch])
 
-OBJS += rate_log.o
+tags:	$(TAGSFILES)
+	@LC_ALL=C ctags $(CTAGSFLAGS) ${TAGSFILES}
 
-OBJS += libreswan_log.o
-OBJS += libreswan_log_rc.o
+cscope:
+	@ls ${TAGSFILES} > cscope.files
+	@cscope -b
 
-OBJS += lswlog.o
-OBJS += lswlog_dbg.o
-OBJS += lswlog_nss_error.o
-OBJS += lswlog_nss_ckm.o
-OBJS += lswlog_nss_ckf.o
-OBJS += lswlog_nss_cka.o
-OBJS += lswlog_nss_secitem.o
-OBJS += lswlog_source_line.o
-OBJS += lswlog_sanitized.o
-OBJS += lswlog_errno.o
-OBJS += lswlog_bytes.o
-OBJS += lswlog_enum_lset_short.o
-OBJS += lswlog_realtime.o
-OBJS += lswlog_deltatime.o
-OBJS += lswlog_monotime.o
-OBJS += lswlog_ip.o
-OBJS += lswlog_sensitive_ip.o
-OBJS += lswlog_to_file_stream.o
-OBJS += lswlog_pexpect.o
-OBJS += lswlog_passert.o
+TAGS:	$(TAGSFILES)
+	@LC_ALL=C etags $(ETAGSFLAGS) ${TAGSFILES}
 
-# Crypto code:
+.PHONY: dummy
+dummy:
+
+
+# Run regress stuff after the other check targets.
+.PHONY: regress
+check: regress
+regress: local-check recursive-check
+ifneq ($(strip(${REGRESSRESULTS})),)
+	mkdir -p ${REGRESSRESULTS}
+	-perl testing/utils/regress-summarize-results.pl ${REGRESSRESULTS}
+endif
+	@echo "======== End of make check target. ========"
+
+include ${LIBRESWANSRCDIR}/mk/subdirs.mk
+
+# kernel details
+# what variant of our patches should we use, and where is it
+KERNELREL=$(shell ${KVSHORTUTIL} ${KERNELSRC}/Makefile)
+
+# directories visited by all recursion
+
+# programs
+
+ABSOBJDIR:=$(shell mkdir -p ${OBJDIR}; cd ${OBJDIR} && pwd)
+OBJDIRTOP=${ABSOBJDIR}
+
+# Recursive clean dealt with elsewhere.
+.PHONY: local-clean-base
+local-clean-base:
+	$(foreach file,$(RPMTMPDIR) $(RPMDEST) out.*build out.*install, \
+		rm -rf $(file) ; )	# but leave out.kpatch
+
+# Delete absolutely everything.
 #
-# XXX: More is coming as it gets cleaned up and made more library
-# like.
+# Since "clean" is a recursive target and requires the existence of
+# $(OBJDIR), "distclean" does not depend on it.  If it did, "make
+# distclean" would have the quirky behaviour of first creating
+# $(OBJDIR) only to then delete it.
+.PHONY: distclean
+distclean: clean-kvm-keys
+	rm -f $(RPMTMPDIR) $(RPMDEST) out.*
+	rm -rf testing/pluto/*/OUTPUT*
+	rm -rf OBJ.* $(OBJDIR)
+	rm -rf BACKUP
 
-# not much left using this
-CFLAGS += -I$(top_srcdir)/lib/libcrypto
 
-OBJS += ike_alg.o
-OBJS += ike_alg_test.o
-OBJS += ike_alg_encrypt_chacha20_poly1305.o
-OBJS += ike_alg_encrypt_nss_aead_ops.o
-OBJS += ike_alg_encrypt_nss_cbc_ops.o
-OBJS += ike_alg_encrypt_nss_ctr_ops.o
-OBJS += ike_alg_encrypt_nss_gcm_ops.o
-OBJS += ike_alg_desc.o
-ifeq ($(USE_3DES),true)
-OBJS += ike_alg_3des.o
-endif
-OBJS += ike_alg_aes.o
-OBJS += ike_alg_camellia.o
-ifeq ($(USE_CAST),true)
-OBJS += ike_alg_cast.o
-endif
-OBJS += ike_alg_dh.o
-OBJS += ike_alg_md5.o
-OBJS += ike_alg_none.o
-ifeq ($(USE_RIPEMD),true)
-OBJS += ike_alg_ripemd.o
-endif
-ifeq ($(USE_SERPENT),true)
-OBJS += ike_alg_serpent.o
-endif
-OBJS += ike_alg_sha1.o
-OBJS += ike_alg_sha2.o
-ifeq ($(USE_TWOFISH),true)
-OBJS += ike_alg_twofish.o
-endif
+# set up for build
+buildready:
+	rm -f dtrmakefile cvs.datemark
+	# obsolete cd doc ; $(MAKE) -s
 
-ifeq ($(NSS_REQ_AVA_COPY),true)
-OBJS += nss_copies.o
-endif
+rpm:
+	@echo To build an rpm, use: rpmbuild -ba packaging/XXX/libreswan.spec
+	@echo where XXX is your rpm based vendor
+	rpmbuild -bs packaging/fedora/libreswan.spec
 
-ifeq ($(USE_UNBOUND_EVENT_H_COPY),true)
-CFLAGS+=-I${LIBRESWANSRCDIR}/include/unbound
-endif
+tarpkg:
+	@echo "Generating tar.gz package to install"
+	@rm -rf /var/tmp/libreswan-${USER}
+	@make DESTDIR=/var/tmp/libreswan-${USER} programs install
+	@rm /var/tmp/libreswan-${USER}/etc/ipsec.conf
+	@(cd /var/tmp/libreswan-${USER} && tar czf - . ) >libreswan-${IPSECVERSION}.tgz
+	@ls -l libreswan-${IPSECVERSION}.tgz
+	@rm -rf /var/tmp/libreswan-${USER}
 
-ifeq ($(USE_DNSSEC),true)
-OBJS += unbound.o
-endif
 
-OBJS += sanitizestring.o
-OBJS += pfkey_sock.o pfkey_error.o
+env:
+	@env | sed -e "s/'/'\\\\''/g" -e "s/\([^=]*\)=\(.*\)/\1='\2'/"
 
+#
+#  A target that does nothing intesting is sometimes interesting...
+war:
+	@echo "Not Love?"
+
+showversion:
+	@echo ${IPSECVERSION} | sed "s/^v//"
+showdebversion:
+	@echo ${IPSECVERSION} |  sed "s/^v//" | sed -e "s/\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\(.*\)/\1.\2~\3/" | sed "s/~-/~/"
+showrpmversion:
+	@echo ${IPSECVERSION} |  sed "s/^v//" | sed -e "s/^v//;s/\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\(.*\)/\1.\2_\3/;s/-/_/g;s/__/_/g"
+showrpmrelease:
+	@echo ${IPSECVERSION} | sed "s/^v//" | sed "s/^[^-]*-\(.*\)/\1/"
+showobjdir:
+	@echo $(OBJDIR)
+
+# these need to move elsewhere and get fixed not to use root
+
+deb:
+	cp -r packaging/debian .
+	grep "IPSECBASEVERSION" debian/changelog && \
+		sed -i "s/@IPSECBASEVERSION@/`make -s showdebversion`/g" debian/changelog || \
+		echo "missing IPSECBASEVERSION in debian/changelog. This is not git repository?"
+	debuild -i -us -uc -b
+	rm -fr debian
+	#debuild -S -sa
+	@echo "to build optional KLIPS kernel module, run make deb-klips"
+
+release:
+	packaging/utils/makerelease
+
+local-install:
+	@if test -z "$(DESTDIR)" -a -x /usr/sbin/selinuxenabled -a $(PUBDIR) != "$(DESTDIR)/usr/sbin" ; then \
+	if /usr/sbin/selinuxenabled ; then  \
+		echo -e "\n************************** WARNING ***********************************" ; \
+		echo "SElinux is present on this system and the prefix path is not /usr." ; \
+		echo "This can cause software failures if selinux is running in Enforcing mode"; \
+		echo -e "unless selinux policies are updated manually to allow this.\n" ; \
+		echo "The following commands fix a common issue of /usr/local/ being mislabeled"; \
+		echo "    restorecon /usr/local/sbin -Rv"; \
+		echo "    restorecon /usr/local/libexec/ipsec -Rv"; \
+		if test -x /usr/sbin/getenforce ; then \
+			echo -e "\nSElinux is currently running in `/usr/sbin/getenforce` mode" ; \
+		fi ; \
+		echo -e "**********************************************************************\n" ; \
+	fi \
+	fi
+	@if test ! -f $(DESTDIR)/etc/pam.d/pluto ; then \
+		mkdir -p $(DESTDIR)/etc/pam.d/ ; \
+		$(INSTALL) $(INSTCONFFLAGS) pam.d/pluto $(DESTDIR)/etc/pam.d/pluto ; \
+	else \
+		echo -e "\n************************** WARNING ***********************************" ; \
+		echo "We are not installing a new copy of the pam.d/pluto file, as one" ; \
+		echo "was already present.  You may wish to update it yourself if desired." ; \
+		echo -e "**********************************************************************\n" ; \
+	fi
+
+# Test only target (run by swan-install) that generates FIPS .*.hmac
+# file for pluto that will be verified by fipscheck.
+#
+# (should really use fipshmac -d /usr/lib64/fipscheck but then
+#  we need to hassle with multilib)
+# Without this fipscheck (run in FIPS mode) will fail.
+
+.PHONY: install-fipshmac
+install-fipshmac:
+	fipshmac $(LIBEXECDIR)/pluto
+
+include ${LIBRESWANSRCDIR}/mk/docker-targets.mk
+include ${LIBRESWANSRCDIR}/mk/kvm-targets.mk
+include ${LIBRESWANSRCDIR}/mk/web-targets.mk
 ifeq ($(USE_KLIPS),true)
-CFLAGS += -DKLIPS
+include ${LIBRESWANSRCDIR}/mk/kernel.mk
 endif
-
-ifeq ($(USE_PFKEYv2),true)
-CFLAGS += -DPFKEYV2
-OBJS += pfkey_v2_build.o pfkey_v2_ext_bits.o pfkey_v2_parse.o
-OBJS += pfkey_v2_debug.o
-endif
-
-# Original flags; this is a mess.
-CFLAGS+=${PORTINCLUDE} -I. -I${KLIPSINC}
-CFLAGS+=-I${LIBRESWANSRCDIR}
-CFLAGS+= $(NSSFLAGS)
-CFLAGS+=-I${LIBRESWANSRCDIR}/include ${PORTINCLUDE}
-# XXX: hack until everything uses a consistent .c.o rule
-CFLAGS+=$(USERLAND_CFLAGS)
-CFLAGS+=${CROSSFLAGS}
-
-ifeq ($(NSS_REQ_AVA_COPY),true)
-CFLAGS+=-DNSS_REQ_AVA_COPY
-endif
-
-OBJS += $(abs_builddir)/version.o
-
-include $(top_srcdir)/mk/library.mk
-
-# build version.c using version number from Makefile.ver
-$(abs_builddir)/version.c: ${KLIPSSRCDIR}/version.in.c $(top_srcdir)/Makefile.ver
-	rm -f $@.tmp
-	sed -e '/"/s/@IPSECVERSION@/$(IPSECVERSION)/' \
-	    -e '/"/s/@IPSECVIDVERSION@/$(IPSECVIDVERSION)/' \
-	    ${KLIPSSRCDIR}/version.in.c \
-	    > $@.tmp
-	mv $@.tmp $@

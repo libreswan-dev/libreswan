@@ -1,0 +1,25 @@
+/testing/guestbin/swan-prep
+east #
+ ipsec start
+Redirecting to: systemctl start ipsec.service
+east #
+ /testing/pluto/bin/wait-until-pluto-started
+east #
+ ipsec auto --add westnet-eastnet-ikev2-major
+002 added connection description "westnet-eastnet-ikev2-major"
+east #
+ echo "initdone"
+initdone
+east #
+ grep INVALID_MAJOR_VERSION /tmp/pluto.log
+packet from 192.1.2.45:500: sending notification INVALID_MAJOR_VERSION to 192.1.2.45:500
+|    Notify Message Type: INVALID_MAJOR_VERSION (0x5)
+east #
+ grep "INVALID_MAJOR_VERSION" /tmp/pluto.log >/dev/null && echo payload found
+payload found
+east #
+east #
+ ../bin/check-for-core.sh
+east #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+
