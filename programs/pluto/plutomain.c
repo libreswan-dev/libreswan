@@ -61,6 +61,7 @@
 #include "state_db.h"	/* for init_state_db() */
 #include "nat_traversal.h"
 #include "ike_alg.h"
+#include "af_info.h"		/* for init_af_info() */
 
 #ifndef IPSECDIR
 #define IPSECDIR "/etc/ipsec.d"
@@ -157,10 +158,6 @@ static const char compile_time_interop_options[] = ""
 #ifdef KLIPS
 	" KLIPS"
 #endif
-#ifdef KLIPS_MAST
-	" MAST"
-#endif
-
 #if USE_FORK
 	" FORK"
 #endif
@@ -180,6 +177,12 @@ static const char compile_time_interop_options[] = ""
 	" BROKEN_POPEN"
 #endif
 	" NSS"
+#ifdef NSS_REQ_AVA_COPY
+	" (AVA copy)"
+#endif
+#ifdef NSS_IPSEC_PROFILE
+	" (IPsec profile)"
+#endif
 #ifdef USE_DNSSEC
 	" DNSSEC"
 #endif
@@ -206,9 +209,6 @@ static const char compile_time_interop_options[] = ""
 #endif
 #ifdef HAVE_NM
 	" NETWORKMANAGER"
-#endif
-#ifdef KLIPS_MAST
-	" KLIPS_MAST"
 #endif
 #ifdef LIBCURL
 	" CURL(non-NSS)"
@@ -901,10 +901,6 @@ int main(int argc, char **argv)
 		}
 			continue;
 
-		case 'M':	/* --use-mast */
-			kern_interface = USE_MASTKLIPS;
-			continue;
-
 		case 'F':	/* --use-bsdkame */
 			kern_interface = USE_BSDKAME;
 			continue;
@@ -1321,8 +1317,6 @@ int main(int argc, char **argv)
 				kern_interface = USE_NETKEY;
 			} else if (streq(protostack, "klips")) {
 				kern_interface = USE_KLIPS;
-			} else if (streq(protostack, "mast")) {
-				kern_interface = USE_MASTKLIPS;
 			} else if (streq(protostack, "netkey") ||
 				streq(protostack, "native")) {
 				kern_interface = USE_NETKEY;
@@ -1505,6 +1499,7 @@ int main(int argc, char **argv)
 		passert(log_to_stderr || dup2(0, 2) == 2);
 	}
 
+	init_af_info();
 	init_constants();
 	init_pluto_constants();
 
@@ -1665,35 +1660,6 @@ int main(int argc, char **argv)
 
 	libreswan_log(leak_detective ?
 		"leak-detective enabled" : "leak-detective disabled");
-
-	/* Check for SAREF support */
-#ifdef KLIPS_MAST
-#include <ipsec_saref.h>
-	{
-		int e, sk, saref;
-		saref = 1;
-		errno = 0;
-
-		sk = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-		e = setsockopt(sk, IPPROTO_IP, IP_IPSEC_REFINFO, &saref,
-			sizeof(saref));
-		if (e == -1 )
-			libreswan_log("SAref support [disabled]: %s",
-				strerror(errno));
-		else
-			libreswan_log("SAref support [enabled]");
-		errno = 0;
-		e = setsockopt(sk, IPPROTO_IP, IP_IPSEC_BINDREF, &saref,
-			sizeof(saref));
-		if (e == -1 )
-			libreswan_log("SAbind support [disabled]: %s",
-				strerror(errno));
-		else
-			libreswan_log("SAbind support [enabled]");
-
-		close(sk);
-	}
-#endif
 
 	libreswan_log("NSS crypto [enabled]");
 

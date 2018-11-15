@@ -30,6 +30,7 @@
 
 #include "send.h"
 #include "ikev2_send.h"
+#include "ikev2_message.h"
 #include "server.h"
 #include "state.h"
 #include "connections.h"
@@ -38,6 +39,7 @@
 #include "pluto_stats.h"
 #include "demux.h"	/* for struct msg_digest */
 #include "rnd.h"
+#include "ikev2.h"	/* for v2_msg_role() */
 
 bool record_and_send_v2_ike_msg(struct state *st, pb_stream *pbs,
 				const char *what)
@@ -119,44 +121,6 @@ bool ship_v2V(pb_stream *outs, enum next_payload_types_ikev2 np,
 	}
 	close_output_pbs(&pbs);
 	return true;
-}
-
-/*
- * Determine the IKE version we will use for the IKE packet
- * Normally, this is "2.0", but in the future we might need to
- * change that. Version used is the minimum 2.x version both
- * sides support. So if we support 2.1, and they support 2.0,
- * we should sent 2.0 (not implemented until we hit 2.1 ourselves)
- * We also have some impair functions that modify the major/minor
- * version on purpose - for testing
- *
- * rcv_version: the received IKE version, 0 if we don't know
- *
- * top 4 bits are major version, lower 4 bits are minor version
- */
-uint8_t build_ikev2_version(void)
-{
-	/* TODO: if bumping, we should also set the Version flag in the ISAKMP header */
-	return ((IKEv2_MAJOR_VERSION + (IMPAIR(MAJOR_VERSION_BUMP) ? 1 : 0))
-			<< ISA_MAJ_SHIFT) |
-	       (IKEv2_MINOR_VERSION + (IMPAIR(MINOR_VERSION_BUMP) ? 1 : 0));
-}
-
-uint8_t build_ikev2_critical(bool impair)
-{
-	uint8_t octet = 0;
-	if (impair) {
-		/* flip the expected bit */
-		libreswan_log("IMPAIR: setting (should be off) critical payload bit");
-		octet = ISAKMP_PAYLOAD_CRITICAL;
-	} else {
-		octet = ISAKMP_PAYLOAD_NONCRITICAL;
-	}
-	if (IMPAIR(SEND_BOGUS_PAYLOAD_FLAG)) {
-		libreswan_log("IMPAIR: adding bogus bit to critical octet");
-		octet |= ISAKMP_PAYLOAD_LIBRESWAN_BOGUS;
-	}
-	return octet;
 }
 
 /*
@@ -276,125 +240,6 @@ bool ship_v2Ns(enum next_payload_types_ikev2 np,
 }
 
 /*
- * Open an IKEv2 message.
- *
- * At least one of the IKE SA and/or MD must be specified.
- *
- * The opened PBS is put into next-payload back-patch mode so
- * containing payloads should not specify their payload-type.  It will
- * instead be taken from the payload struct descriptor.
- */
-pb_stream open_v2_message(pb_stream *reply,
-			  struct ike_sa *ike, struct msg_digest *md,
-			  enum isakmp_xchg_types exchange_type)
-{
-	/* at least one, possibly both */
-	passert(ike != NULL || md != NULL);
-
-	struct isakmp_hdr hdr = {
-		.isa_flags = IMPAIR(SEND_BOGUS_ISAKMP_FLAG) ? ISAKMP_FLAGS_RESERVED_BIT6 : LEMPTY,
-		.isa_version = build_ikev2_version(),
-		.isa_xchg = exchange_type,
-		.isa_length = 0, /* filled in when PBS is closed */
-		.isa_np = ISAKMP_NEXT_v2NONE, /* filled in when next payload is added */
-	};
-
-	/*
-	 * I(Initiator) flag
-	 *
-	 * If there was no IKE SA then this must be the original
-	 * responder (the only time that pluto constructs a packet
-	 * with no state is when replying to an SA_INIT or AUTH
-	 * request with an unencrypted response), else just use the
-	 * IKE SA's role.
-	 */
-	if (ike != NULL) {
-		switch (ike->sa.st_sa_role) {
-		case SA_INITIATOR:
-			hdr.isa_flags |= ISAKMP_FLAGS_v2_IKE_I;
-			break;
-		case SA_RESPONDER:
-			break;
-		default:
-			bad_case(ike->sa.st_sa_role);
-		}
-	}
-
-	/*
-	 * R(Responder) flag
-	 *
-	 * If there's no MD, then this must be a new request -
-	 * R(Responder) flag clear.
-	 *
-	 * If there is an MD, and it contains a message request, then
-	 * this end must be sending a response - R(Responder) flag
-	 * set.
-	 *
-	 * If there is an MD, and it contains a message response, then
-	 * the caller is trying to respond to a response (or someone's
-	 * been faking MDs), which is pretty messed up.
-	 */
-	if (md != NULL) {
-		switch (md->message_role) {
-		case MESSAGE_REQUEST:
-			hdr.isa_flags |= ISAKMP_FLAGS_v2_MSG_R;
-			break;
-		case MESSAGE_RESPONSE:
-			PEXPECT_LOG("trying to respond to a message response%s", "");
-			return empty_pbs;
-		default:
-			bad_case(MESSAGE_RESPONSE);
-		}
-	}
-
-	/*
-	 * SPI (aka cookies).
-	 */
-	if (ike != NULL) {
-		/*
-		 * Note that when the original initiator sends the
-		 * SA_INIT request, the still zero RCOOKIE will be
-		 * copied.
-		 */
-		memcpy(hdr.isa_icookie, ike->sa.st_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, ike->sa.st_rcookie, COOKIE_SIZE);
-	} else {
-		/*
-		 * Not that when responding to an SA_INIT with an
-		 * error notification (hence no state), the copied
-		 * RCOOKIE will (should be?).
-		 */
-		passert(md != NULL);
-		memcpy(hdr.isa_icookie, md->hdr.isa_icookie, COOKIE_SIZE);
-		memcpy(hdr.isa_rcookie, md->hdr.isa_rcookie, COOKIE_SIZE);
-	}
-
-	/*
-	 * Message ID
-	 *
-	 * If there's a message digest (MD) (presumably containing a
-	 * message request) then this must be a response - use the
-	 * message digest's message ID.  A better choice should be
-	 * .st_msgid_lastrecv (or .st_msgid_lastrecv+1), but it isn't
-	 * clear if/when that value is updated.
-	 *
-	 * If it isn't a response then use the IKE SA's
-	 * .st_msgid_nextuse.  The caller still needs to both
-	 * increment .st_msgid_nextuse (can't do this until the packet
-	 * is finished) and update .st_msgid (only caller knows if
-	 * this is for the IKE SA or a CHILD SA).
-	 */
-	if (md != NULL) {
-		hdr.isa_msgid = htonl(md->msgid_received);
-	} else {
-		passert(ike != NULL);
-		hdr.isa_msgid = htonl(ike->sa.st_msgid_nextuse);
-	}
-
-	return open_output_struct_pbs(reply, &hdr, &isakmp_hdr_desc);
-}
-
-/*
  *
  ***************************************************************
  *                       NOTIFICATION_OUT Complete packet  *****
@@ -414,7 +259,7 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 
 	ipstr_buf b;
 	libreswan_log("responding to %s message (ID %u) from %s:%u with encrypted notification %s",
-		      exchange_name, md->msgid_received,
+		      exchange_name, md->hdr.isa_msgid,
 		      sensitive_ipstr(&pst->st_remoteaddr, &b),
 		      pst->st_remoteport,
 		      notify_name);
@@ -442,7 +287,7 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 		return;
 	}
 
-	struct v2sk_payload sk = open_v2sk_payload(&rbody, ike_sa(pst));
+	v2SK_payload_t sk = open_v2SK_payload(&rbody, ike_sa(pst));
 	if (!pbs_ok(&sk.pbs)) {
 		return;
 	}
@@ -468,13 +313,13 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 		break;
 	}
 
-	if (!close_v2sk_payload(&sk)) {
+	if (!close_v2SK_payload(&sk)) {
 		return;
 	}
 	close_output_pbs(&rbody);
 	close_output_pbs(&reply);
 
-	stf_status ret = encrypt_v2sk_payload(&sk);
+	stf_status ret = encrypt_v2SK_payload(&sk);
 	if (ret != STF_OK) {
 		libreswan_log("error encrypting notify message");
 		return;
@@ -486,7 +331,7 @@ void send_v2_notification_from_state(struct state *pst, struct msg_digest *md,
 	 * exchange, one with retrying).  So we need not preserve the
 	 * packet we are sending.
 	 */
-	send_chunk_using_state(pst, "v2 notify", pbs_as_chunk(&reply));
+	send_chunk_using_state(pst, "v2 notify", same_out_pbs_as_chunk(&reply));
 	pstat(ikev2_sent_notifies_e, ntype);
 }
 
@@ -502,7 +347,7 @@ void send_v2_notification_from_md(struct msg_digest *md,
 
 	ipstr_buf b;
 	libreswan_log("responding to %s message (ID %u) from %s:%u with unencrypted notification %s",
-		      exchange_name, md->msgid_received,
+		      exchange_name, md->hdr.isa_msgid,
 		      sensitive_ipstr(&md->sender, &b),
 		      hportof(&md->sender),
 		      notify_name);
@@ -528,14 +373,14 @@ void send_v2_notification_from_md(struct msg_digest *md,
 	pb_stream rbody = open_v2_message(&reply, NULL, md, exchange_type);
 	if (!pbs_ok(&rbody)) {
 		PEXPECT_LOG("error building header for unencrypted %s %s notification with message ID %u",
-			    exchange_name, notify_name, md->msgid_received);
+			    exchange_name, notify_name, md->hdr.isa_msgid);
 		return;
 	}
 
 	/* build and add v2N payload to the packet */
 	if (!ship_v2Nsp(ISAKMP_NEXT_v2NONE, ntype, ndata, &rbody)) {
 		PEXPECT_LOG("error building unencrypted %s %s notification with message ID %u",
-			    exchange_name, notify_name, md->msgid_received);
+			    exchange_name, notify_name, md->hdr.isa_msgid);
 		return;
 	}
 
@@ -549,7 +394,7 @@ void send_v2_notification_from_md(struct msg_digest *md,
 	 * are sending.
 	 */
 	send_chunk("v2 notify", SOS_NOBODY, md->iface, md->sender,
-		   pbs_as_chunk(&reply));
+		   same_out_pbs_as_chunk(&reply));
 
 	pstat(ikev2_sent_notifies_e, ntype);
 }
@@ -597,7 +442,7 @@ void send_v2_delete(struct state *const st)
 		return;
 	}
 
-	struct v2sk_payload sk = open_v2sk_payload(&rbody, ike);
+	v2SK_payload_t sk = open_v2SK_payload(&rbody, ike);
 	if (!pbs_ok(&sk.pbs)) {
 		return;
 	}
@@ -640,13 +485,13 @@ void send_v2_delete(struct state *const st)
 		close_output_pbs(&del_pbs);
 	}
 
-	if (!close_v2sk_payload(&sk)) {
+	if (!close_v2SK_payload(&sk)) {
 		return;
 	}
 	close_output_pbs(&rbody);
 	close_output_pbs(&packet);
 
-	stf_status ret = encrypt_v2sk_payload(&sk);
+	stf_status ret = encrypt_v2SK_payload(&sk);
 	if (ret != STF_OK) {
 		libreswan_log("error encrypting notify message");
 		return;
@@ -658,7 +503,7 @@ void send_v2_delete(struct state *const st)
 	/* increase message ID for next delete message */
 	/* ikev2_update_msgid_counters need an md */
 	ike->sa.st_msgid_nextuse++;
-	st->st_msgid = htonl(ike->sa.st_msgid_nextuse);
+	st->st_msgid = ike->sa.st_msgid_nextuse;
 }
 
 /*
@@ -691,7 +536,7 @@ stf_status send_v2_informational_request(const char *name,
 		return STF_INTERNAL_ERROR;
 	}
 
-	struct v2sk_payload sk = open_v2sk_payload(&message, ike);
+	v2SK_payload_t sk = open_v2SK_payload(&message, ike);
 	if (!pbs_ok(&sk.pbs)) {
 		return STF_INTERNAL_ERROR;
 	}
@@ -703,13 +548,13 @@ stf_status send_v2_informational_request(const char *name,
 		}
 	}
 
-	if (!close_v2sk_payload(&sk)) {
+	if (!close_v2SK_payload(&sk)) {
 		return STF_INTERNAL_ERROR;
 	}
 	close_output_pbs(&message);
 	close_output_pbs(&packet);
 
-	stf_status ret = encrypt_v2sk_payload(&sk);
+	stf_status ret = encrypt_v2SK_payload(&sk);
 	if (ret != STF_OK) {
 		return ret;
 	}
@@ -722,94 +567,4 @@ stf_status send_v2_informational_request(const char *name,
 	record_and_send_v2_ike_msg(st, &packet, name);
 
 	return STF_OK;
-}
-
-struct v2sk_payload open_v2sk_payload(pb_stream *container,
-				      struct ike_sa *ike)
-{
-	static const struct v2sk_payload empty_sk;
-	struct v2sk_payload sk = {
-		.ike = ike,
-	};
-
-	/* insert an Encryption payload header */
-
-	struct ikev2_generic e = {
-		.isag_length = 0, /* filled in later */
-		.isag_critical = build_ikev2_critical(false),
-	};
-	if (!out_struct(&e, &ikev2_sk_desc, container, &sk.pbs)) {
-		libreswan_log("error initializing SK header for encrypted %s message",
-			      container->name);
-		return empty_sk;
-	}
-
-	/* insert IV */
-
-	sk.iv = sk.pbs.cur;
-	passert(sk.pbs.cur <= sk.iv);
-	if (!emit_wire_iv(&ike->sa, &sk.pbs)) {
-		libreswan_log("error initializing IV for encrypted %s message",
-			      container->name);
-		return empty_sk;
-	}
-
-	/* save the start of cleartext proper */
-
-	sk.cleartext = sk.pbs.cur;
-	passert(sk.iv <= sk.cleartext);
-	passert(sk.pbs.container->name == container->name);
-
-	return sk;
-}
-
-bool close_v2sk_payload(struct v2sk_payload *sk)
-{
-	/* padding + pad-length */
-
-	size_t padding;
-	if (sk->ike->sa.st_oakley.ta_encrypt->pad_to_blocksize) {
-		const size_t blocksize = sk->ike->sa.st_oakley.ta_encrypt->enc_blocksize;
-		padding = pad_up(sk->pbs.cur - sk->cleartext, blocksize);
-		if (padding == 0) {
-			padding = blocksize;
-		}
-	} else {
-		padding = 1;
-	}
-	DBG(DBG_EMITTING,
-	    DBG_log("adding %zd bytes of padding (including 1 byte padding-length)",
-		    padding));
-	char b[MAX_CBC_BLOCK_SIZE];
-	passert(sizeof(b) >= padding);
-	for (unsigned i = 0; i < padding; i++) {
-		b[i] = i;
-	}
-	if (!out_raw(b, padding, &sk->pbs, "padding and length")) {
-		libreswan_log("error initializing padding for encrypted %s payload",
-			      sk->pbs.container->name);
-		return false;
-	}
-
-	/* integrity checksum data */
-
-	sk->integrity = ikev2_authloc(&sk->ike->sa, &sk->pbs);
-	passert(sk->cleartext <= sk->integrity);
-	if (sk->integrity == NULL) {
-		libreswan_log("error initializing integrity checksum for encrypted %s payload",
-			      sk->pbs.container->name);
-		return false;
-	}
-
-	/* close the SK payload */
-
-	close_output_pbs(&sk->pbs);
-	return true;
-}
-
-stf_status encrypt_v2sk_payload(struct v2sk_payload *sk)
-{
-	return ikev2_encrypt_msg(sk->ike, sk->pbs.container->start,
-				 sk->iv, sk->cleartext,
-				 sk->integrity);
 }
