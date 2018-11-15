@@ -7,7 +7,7 @@
  * Copyright (C) 2003-2010 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2009 Stefan Arentz <stefan@arentz.ca>
- * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
+ * Copyright (C) 2010, 2016 Tuomo Soini <tis@foobar.fi>
  * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2016 Andrew Cagney <cagney@gnu.org>
@@ -15,7 +15,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -53,6 +53,7 @@
 #include "lswconf.h"
 #include "secrets.h"
 #include "lswnss.h"
+#include "lswtool.h"
 
 #include <nss.h>
 #include <keyhi.h>
@@ -60,11 +61,12 @@
 #include <prinit.h>
 
 char usage[] =
-  "Usage: ipsec showhostkey [ --verbose ]\n"
-  "                    { --version | --dump | --list | --left | --right |\n"
-  "                      --ipseckey [ --precedence <precedence> ] [ --gateway <gateway> ] }\n"
-  "                    [ --rsaid <rsaid> | --ckaid <ckaid> ]\n"
-  "                    [ --configdir <configdir> ] [ --password <password> ]\n";
+	"Usage: showhostkey [ --verbose ]\n"
+	"        { --version | --dump | --list | --left | --right |\n"
+	"                --ipseckey [ --precedence <precedence> ] \n"
+	"                [ --gateway <gateway> ] }\n"
+	"        [ --rsaid <rsaid> | --ckaid <ckaid> ]\n"
+	"        [ --nssdir <nssdir> ] [ --password <password> ]\n";
 
 /*
  * For new options, avoid magic numbers.
@@ -73,29 +75,29 @@ char usage[] =
  */
 enum opt {
 	OPT_CONFIGDIR,
+	OPT_DUMP,
 	OPT_PASSWORD,
 	OPT_CKAID,
 };
 
 struct option opts[] = {
-	{ "help",      no_argument,    NULL,   '?', },
-	{ "left",      no_argument,    NULL,   'l', },
-	{ "right",     no_argument,    NULL,   'r', },
-	{ "dump",      no_argument,    NULL,   'D', },
-	{ "list",      no_argument,    NULL,   'L', },
-	{ "ipseckey",  no_argument,    NULL,   'K', },
-	{ "gateway",   required_argument, NULL, 'g', },
-	{ "precedence", required_argument, NULL, 'p', },
-	{ "ckaid",     required_argument, NULL, OPT_CKAID, },
-	{ "rsaid",     required_argument, NULL, 'I', },
-	{ "version",   no_argument,     NULL,  'V', },
-	{ "verbose",   no_argument,     NULL,  'v', },
-	{ "configdir", required_argument,     NULL,  OPT_CONFIGDIR, },
-	{ "password",  required_argument,     NULL,  OPT_PASSWORD, },
-	{ 0,           0,      NULL,   0, }
+	{ "help",       no_argument,            NULL,   '?', },
+	{ "left",       no_argument,            NULL,   'l', },
+	{ "right",      no_argument,            NULL,   'r', },
+	{ "dump",       no_argument,            NULL,   OPT_DUMP, },
+	{ "list",       no_argument,            NULL,   'L', },
+	{ "ipseckey",   no_argument,            NULL,   'K', },
+	{ "gateway",    required_argument,      NULL,   'g', },
+	{ "precedence", required_argument,      NULL,   'p', },
+	{ "ckaid",      required_argument,      NULL,   OPT_CKAID, },
+	{ "rsaid",      required_argument,      NULL,   'I', },
+	{ "version",    no_argument,            NULL,   'V', },
+	{ "verbose",    no_argument,            NULL,   'v', },
+	{ "configdir",  required_argument,      NULL,   OPT_CONFIGDIR, }, /* obsoleted */
+	{ "nssdir",     required_argument,      NULL,   'd', }, /* nss-tools use -d */
+	{ "password",   required_argument,      NULL,   OPT_PASSWORD, },
+	{ 0,            0,                      NULL,   0, }
 };
-
-char *progname = "ipsec showhostkey";   /* for messages */
 
 static void print(struct private_key_stuff *pks,
 		  int count, struct id *id, bool disclose)
@@ -106,7 +108,7 @@ static void print(struct private_key_stuff *pks,
 	}
 
 	char pskbuf[128] = "";
-	if (pks->kind == PPK_PSK || pks->kind == PPK_XAUTH) {
+	if (pks->kind == PKK_PSK || pks->kind == PKK_XAUTH) {
 		datatot(pks->u.preshared_secret.ptr,
 			pks->u.preshared_secret.len,
 			'x', pskbuf, sizeof(pskbuf));
@@ -121,13 +123,14 @@ static void print(struct private_key_stuff *pks,
 	}
 
 	switch (pks->kind) {
-	case PPK_PSK:
+	case PKK_PSK:
 		printf("PSK keyid: %s\n", idb);
 		if (disclose)
 			printf("    psk: \"%s\"\n", pskbuf);
 		break;
 
-	case PPK_RSA: {
+	// only old/obsolete secrets entries use this
+	case PKK_RSA: {
 		printf("RSA");
 		char *keyid = pks->u.RSA_private_key.pub.keyid;
 		printf(" keyid: %s", keyid[0] ? keyid : "<missing-pubkey>");
@@ -140,15 +143,29 @@ static void print(struct private_key_stuff *pks,
 		break;
 	}
 
-	case PPK_XAUTH:
+	// this never has a secret entry so shouldn't ne needed
+	case PKK_ECDSA: {
+		break;
+	}
+
+	case PKK_XAUTH:
 		printf("XAUTH keyid: %s\n", idb);
 		if (disclose)
 			printf("    xauth: \"%s\"\n", pskbuf);
 		break;
-	case PPK_NULL:
+
+	case PKK_PPK:
+		break;
+
+	case PKK_NULL:
 		/* can't happen but the compiler does not know that */
 		printf("NULL authentication -- cannot happen: %s\n", idb);
 		abort();
+
+	case PKK_INVALID:
+		printf("Invalid or unknown key: %s\n", idb);
+		exit(1);
+
 	}
 }
 
@@ -191,7 +208,7 @@ static int pick_by_rsaid(struct secret *secret UNUSED,
 {
 	char *rsaid = (char *)uservoid;
 
-	if (pks->kind == PPK_RSA && streq(pks->u.RSA_private_key.pub.keyid, rsaid)) {
+	if (pks->kind == PKK_RSA && streq(pks->u.RSA_private_key.pub.keyid, rsaid)) {
 		/* stop */
 		return 0;
 	} else {
@@ -205,7 +222,7 @@ static int pick_by_ckaid(struct secret *secret UNUSED,
 			 void *uservoid)
 {
 	char *start = (char *)uservoid;
-	if (pks->kind == PPK_RSA && ckaid_starts_with(pks->u.RSA_private_key.pub.ckaid, start)) {
+	if (pks->kind == PKK_RSA && ckaid_starts_with(pks->u.RSA_private_key.pub.ckaid, start)) {
 		/* stop */
 		return 0;
 	} else {
@@ -224,7 +241,7 @@ static char *pubkey_to_rfc3110_base64(const struct RSA_public_key *pub)
 	char* base64;
 	err_t err = rsa_pubkey_to_base64(pub->e, pub->n, &base64);
 	if (err) {
-		fprintf(stderr, "%s: unexpected error encoing RSA public key '%s'\n",
+		fprintf(stderr, "%s: unexpected error encoding RSA public key '%s'\n",
 			progname, err);
 		return NULL;
 	}
@@ -240,9 +257,9 @@ static int show_dnskey(struct private_key_stuff *pks,
 
 	gethostname(qname, sizeof(qname));
 
-	if (pks->kind != PPK_RSA) {
-		fprintf(stderr, "%s: wrong kind of key %s in show_dnskey. Expected PPK_RSA.\n",
-			progname, enum_name(&ppk_names, pks->kind));
+	if (pks->kind != PKK_RSA) {
+		fprintf(stderr, "%s: wrong kind of key %s in show_dnskey. Expected PKK_RSA.\n",
+			progname, enum_name(&pkk_names, pks->kind));
 		return 5;
 	}
 
@@ -276,19 +293,19 @@ static int show_dnskey(struct private_key_stuff *pks,
 static int show_confkey(struct private_key_stuff *pks,
 			char *side)
 {
-	if (pks->kind != PPK_RSA) {
+	if (pks->kind != PKK_RSA) {
 		char *enumstr = "gcc is crazy";
 		switch (pks->kind) {
-		case PPK_PSK:
-			enumstr = "PPK_PSK";
+		case PKK_PSK:
+			enumstr = "PKK_PSK";
 			break;
-		case PPK_XAUTH:
-			enumstr = "PPK_XAUTH";
+		case PKK_XAUTH:
+			enumstr = "PKK_XAUTH";
 			break;
 		default:
 			sscanf(enumstr, "UNKNOWN (%d)", (int *)pks->kind);
 		}
-		fprintf(stderr, "%s: wrong kind of key %s in show_confkey. Expected PPK_RSA.\n",
+		fprintf(stderr, "%s: wrong kind of key %s in show_confkey. Expected PKK_RSA.\n",
 			progname, enumstr);
 		return 5;
 	}
@@ -319,6 +336,9 @@ static struct private_key_stuff *foreach_secret(secret_eval func, void *uservoid
 
 int main(int argc, char *argv[])
 {
+	log_to_stderr = FALSE;
+	tool_init_log("ipsec showhostkey");
+
 	int opt;
 	bool left_flg = FALSE;
 	bool right_flg = FALSE;
@@ -329,9 +349,6 @@ int main(int argc, char *argv[])
 	int precedence = 10;
 	char *ckaid = NULL;
 	char *rsaid = NULL;
-
-	log_to_stderr = FALSE;
-	tool_init_log();
 
 	while ((opt = getopt_long(argc, argv, "", opts, NULL)) != EOF) {
 		switch (opt) {
@@ -346,7 +363,7 @@ int main(int argc, char *argv[])
 			right_flg = TRUE;
 			break;
 
-		case 'D': /* --dump */
+		case OPT_DUMP:
 			dump_flg = TRUE;
 			break;
 
@@ -382,9 +399,6 @@ int main(int argc, char *argv[])
 			gateway = clone_str(optarg, "gateway");
 			break;
 
-		case 'd':
-			break;
-
 		case OPT_CKAID:
 			ckaid = clone_str(optarg, "ckaid");
 			break;
@@ -393,15 +407,9 @@ int main(int argc, char *argv[])
 			rsaid = clone_str(optarg, "rsaid");
 			break;
 
-		case OPT_CONFIGDIR:
-#if 0
-			/*
-			 * Will mean adding extra --nssdb option.
-			 */
-			lsw_conf_configddir(optarg);
-#else
-			lsw_init_ipsecdir(optarg);
-#endif
+		case OPT_CONFIGDIR:	/* Obsoletd by --nssdir|-d */
+		case 'd':
+			lsw_conf_nssdir(optarg);
 			break;
 
 		case OPT_PASSWORD:
@@ -453,14 +461,14 @@ int main(int argc, char *argv[])
 	 * processed, and really are "constant".
 	 */
 	const struct lsw_conf_options *oco = lsw_init_options();
-	libreswan_log("using config directory \"%s\"\n", oco->confddir);
+	libreswan_log("using nss directory \"%s\"\n", oco->nssdir);
 
 	/*
 	 * Set up for NSS - contains key pairs.
 	 */
 	int status = 0;
 	lsw_nss_buf_t err;
-	if (!lsw_nss_setup(oco->nssdb, LSW_NSS_READONLY,
+	if (!lsw_nss_setup(oco->nssdir, LSW_NSS_READONLY,
 			   lsw_nss_get_password, err)) {
 		fprintf(stderr, "%s: %s\n", progname, err);
 		exit(1);

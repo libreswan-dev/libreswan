@@ -8,7 +8,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -34,6 +34,8 @@
 #include "defs.h"
 #include "constants.h"
 #include "addresspool.h"
+#include "monotime.h"
+#include "ip_address.h"
 
 
 /*
@@ -47,9 +49,9 @@
 struct ip_pool {
 	unsigned pool_refcount;	/* reference counted! */
 	ip_range r;
-	u_int32_t size;		/* number of addresses within range */
-	u_int32_t used;		/* number of addresses in use (includes lingering) */
-	u_int32_t lingering;	/* number of lingering addresses */
+	uint32_t size;		/* number of addresses within range */
+	uint32_t used;		/* number of addresses in use (includes lingering) */
+	uint32_t lingering;	/* number of lingering addresses */
 	struct lease_addr *leases;	/* monotonically increasing index values */
 
 	struct ip_pool *next;	/* next pool */
@@ -58,9 +60,7 @@ struct ip_pool {
 /*
  * A lease is an assignment of a single address from a particular pool.
  *
- * Leases are shared between appropriate connections.  Appropriate means
- * ones with the same thatid, as long as it isn't ID_NONE and uniqueIDs
- * is in force.  could_share_lease captures this distinction.
+ * Leases are shared between appropriate connections.
  *
  * Because leases are shared, they are reference-counted.
  * (Since we don't (yet?) free leases that could be shared,
@@ -84,10 +84,34 @@ struct ip_pool {
  *   ??? This constitutes a leak.
  */
 
-#define	could_share_lease(c) ((c)->spd.that.id.kind != ID_NONE && uniqueIDs)
+static bool can_share_lease(const struct connection *c)
+{
+	/*
+	 * Cannot share with PSK - it either uses GroupID or
+	 * a non-unique ID_IP due to clients using pre-NAT IP address
+	 */
+	if (((c->policy & POLICY_PSK) != LEMPTY) || c->spd.that.authby == AUTH_PSK)
+		return FALSE;
+
+	/* Cannot share with NULL authentication */
+	if (((c->policy & POLICY_AUTH_NULL) != LEMPTY) || c->spd.that.authby == AUTH_NULL)
+		return FALSE;
+
+	/* Cannot share NULL/NONE ID. Also cannot share ID_IP due to NAT and dynamic IP */
+	if (c->spd.that.id.kind == ID_NULL || c->spd.that.id.kind == ID_NONE ||
+		c->spd.that.id.kind == ID_IPV4_ADDR || c->spd.that.id.kind == ID_IPV6_ADDR)
+			return FALSE;
+
+	/* If uniqueids=false - this can mean multiple clients on the same ID & CERT */
+	if (!uniqueIDs)
+		return FALSE;
+
+	DBG(DBG_CONTROL, DBG_log("addresspool can share this lease"));
+	return TRUE;
+}
 
 struct lease_addr {
-	u_int32_t index;	/* range start + index == IP address */
+	uint32_t index;	/* range start + index == IP address */
 	struct id thatid;	/* from connection */
 	unsigned refcnt;	/* reference counted */
 	monotime_t lingering_since;	/* when did this begin to linger */
@@ -136,7 +160,7 @@ static void free_lease_list(struct lease_addr **head)
  * pointer to NULL).
  */
 
-static struct lease_addr **ref_to_lease(struct ip_pool *pool, u_int32_t i) {
+static struct lease_addr **ref_to_lease(struct ip_pool *pool, uint32_t i) {
 	struct lease_addr **pp;
 	struct lease_addr *p;
 
@@ -163,7 +187,7 @@ static struct lease_addr **ref_to_lease(struct ip_pool *pool, u_int32_t i) {
 void rel_lease_addr(struct connection *c)
 {
 	struct ip_pool *pool = c->pool;
-	u_int32_t i;	/* index within range of IPv4 address to be released */
+	uint32_t i;	/* index within range of IPv4 address to be released */
 	unsigned refcnt;	/* for DBG logging */
 	const char *story;	/* for DBG logging */
 
@@ -191,7 +215,7 @@ void rel_lease_addr(struct connection *c)
 
 		p = *pp;
 
-		if (could_share_lease(c)) {
+		if (can_share_lease(c)) {
 			/* we could share, so leave lease lingering */
 			story = "left (shared)";
 			passert(p->refcnt > 0);
@@ -232,16 +256,17 @@ void rel_lease_addr(struct connection *c)
 
 /*
  * return previous lease if there is one lingering for the same ID
- * but only if uniqueIDs, and ID_NONE does not count.
  */
 static bool share_lease(const struct connection *c,
-			u_int32_t *index /*result*/)
+			uint32_t *index /*result*/)
 {
 	struct lease_addr *p;
 	bool r = FALSE;
 
-	if (!could_share_lease(c))
+	if (!can_share_lease(c)) {
+		DBG(DBG_CONTROL, DBG_log("cannot share a lease, find a new lease IP"));
 		return FALSE;
+	}
 
 	for (p = c->pool->leases; p != NULL; p = p->next) {
 		if (same_id(&p->thatid, &c->spd.that.id)) {
@@ -284,14 +309,14 @@ static bool share_lease(const struct connection *c,
 	return r;
 }
 
-err_t lease_an_address(const struct connection *c,
+err_t lease_an_address(const struct connection *c, const struct state *st,
 		     ip_address *ipa /*result*/)
 {
 	/*
 	 * index within address range
 	 * Initialized just to silence GCC.
 	 */
-	u_int32_t i = 0;
+	uint32_t i = 0;
 	bool s;
 
 	DBG(DBG_CONTROL, {
@@ -301,6 +326,10 @@ err_t lease_an_address(const struct connection *c,
 
 		rangetot(&c->pool->r, 0, rbuf, sizeof(rbuf));
 		idtoa(&c->spd.that.id, thatidbuf, sizeof(thatidbuf));
+		if (st->st_xauth_username != NULL) {
+			/* force different leases for different xauth users */
+			jam_str(thatidbuf, sizeof(thatidbuf), st->st_xauth_username);
+		}
 
 		/* ??? what is that.client.addr and why do we care? */
 		DBG_log("request lease from addresspool %s reference count %u thatid '%s' that.client.addr %s",
@@ -314,20 +343,22 @@ err_t lease_an_address(const struct connection *c,
 		 * cannot find or cannot share an existing lease:
 		 * allocate a new one
 		 */
-		const u_int32_t size = c->pool->size;
+		const uint32_t size = c->pool->size;
 		struct lease_addr **pp;
 		struct lease_addr *p;
 		struct lease_addr *ll = NULL;	/* longest lingerer */
+		bool can_share = can_share_lease(c);
 
 		for (pp = &c->pool->leases; (p = *pp) != NULL; pp = &p->next) {
 			/* check that list of leases is
 			 * monotonically increasing.
 			 */
 			passert(p->index >= i);
-			if (p->index > i)
+			if (p->index > i) {
 				break;
+			}
 			/* remember the longest lingering lease found */
-			if (p->refcnt == 0 &&
+			if (can_share && p->refcnt == 0 &&
 			    (ll == NULL ||
 			     monobefore(ll->lingering_since, p->lingering_since)))
 				ll = p;
@@ -450,8 +481,14 @@ void unreference_addresspool(struct connection *c)
 	c->pool = NULL;
 }
 
-void reference_addresspool(struct ip_pool *pool)
+void reference_addresspool(struct connection *c)
 {
+	struct ip_pool *pool = c->pool;
+
+	DBG(DBG_CONTROLMORE, DBG_log("reference addresspool of conn %s[%lu] kind %s refcnt %u",
+				c->name, c->instance_serial,
+				enum_name(&connection_kind_names,
+					c->kind), pool->pool_refcount));
 	pool->pool_refcount++;
 }
 
@@ -511,7 +548,6 @@ struct ip_pool *install_addresspool(const ip_range *pool_range)
 		/* ??? Assume diagnostic already logged? */
 	} else if (p != NULL) {
 		/* re-use existing pool p */
-		reference_addresspool(p);
 		DBG(DBG_CONTROLMORE, {
 			char rbuf[RANGETOT_BUF];
 
@@ -524,7 +560,6 @@ struct ip_pool *install_addresspool(const ip_range *pool_range)
 		p = alloc_thing(struct ip_pool, "addresspool entry");
 
 		p->pool_refcount = 0;
-		reference_addresspool(p);
 		p->r = *pool_range;
 		p->size = ntohl(p->r.end.u.v4.sin_addr.s_addr) -
 			  ntohl(p->r.start.u.v4.sin_addr.s_addr) + 1;

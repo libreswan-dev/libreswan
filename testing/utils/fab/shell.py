@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -35,7 +35,7 @@ DOLLAR_GROUP = "dollar"
 # Patterns for each part of the above prompt
 USERNAME_PATTERN = "[-\.a-z0-9]+"
 HOSTNAME_PATTERN = "[-a-z0-9]+"
-BASENAME_PATTERN = "[-\.a-z0-9A-Z_~]+"
+BASENAME_PATTERN = "[-+=:,\.a-z0-9A-Z_~]+"
 STATUS_PATTERN = "| [0-9]+"
 DOLLAR_PATTERN = "[#\$]"
 
@@ -196,6 +196,12 @@ class Remote:
     def sendline(self, line):
         return self.child.sendline(line)
 
+    def drain(self):
+        self.logger.debug("draining any existing output")
+        if self.expect([r'.+', pexpect.TIMEOUT], timeout=0) == 0:
+            self.logger.info("discarding '%s' and re-draining", self.child.match)
+            self.expect([r'.+', pexpect.TIMEOUT], timeout=0)
+
     def expect(self, expect, timeout=TIMEOUT, searchwindowsize=-1):
         return self.child.expect(expect, timeout=timeout,
                                  searchwindowsize=searchwindowsize)
@@ -212,7 +218,7 @@ class Remote:
 
         In addition to matching EXPECT+"\s+"+PROMPT, and to speed up
         error detection, just PROMPT is also matched.  The latter is
-        treated as if a timeout occured.  If things are not kept in
+        treated as if a timeout occurred.  If things are not kept in
         sync, this will match an earlier prompt.  The idea is found in
         DEJAGNU based tools.
 

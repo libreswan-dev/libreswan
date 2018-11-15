@@ -1,15 +1,15 @@
 ipsec whack --trafficstatus
 ipsec whack --shuntstatus
-ipsec look
-ipsec look
+../../pluto/bin/ipsec-look.sh
+../../pluto/bin/ipsec-look.sh
 grep "message ID:" /tmp/pluto.log
 # grep on east
-hostname |grep west > /dev/null || grep -A 1 "liveness_check - peer has not responded in" OUTPUT/east.pluto.log
+hostname |grep west > /dev/null || grep -A 1 "has not responded in" /tmp/pluto.log
 # A tunnel should have established
 grep "negotiated connection" /tmp/pluto.log
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
-if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
+../bin/check-for-core.sh
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

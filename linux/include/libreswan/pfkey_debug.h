@@ -7,7 +7,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -40,8 +40,8 @@ extern unsigned int pfkey_lib_debug;  /* bits selecting what to report */
 
 #else
 
-extern int (*pfkey_debug_func)(const char *message, ...) PRINTF_LIKE(1);
-extern int (*pfkey_error_func)(const char *message, ...) PRINTF_LIKE(1);
+extern libreswan_keying_debug_func_t pfkey_debug_func;
+extern libreswan_keying_debug_func_t pfkey_error_func;
 
 #define DEBUGGING(level, args ...)  { if (pfkey_lib_debug & (level)) { \
 		if (pfkey_debug_func != NULL) { \

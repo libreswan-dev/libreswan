@@ -1,4 +1,6 @@
-/* IPsec IKE Dead Peer Detection code.
+/*
+ * IPsec IKE Dead Peer Detection / Liveness code.
+ *
  * Copyright (C) 2003 Ken Bantoft        <ken@xelerance.com>
  * Copyright (C) 2003-2006 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2008-2010 Paul Wouters <paul@xelerance.com>
@@ -6,14 +8,15 @@
  * Copyright (C) 2012 Avesh Agarwal <avagarwa@redhat.com>
  * Copyright (C) 2012 Andrey Alexandrenko <aalexandrenko@telco-tech.de>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
- * Copyright (C) 2013 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
- * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2013-2017 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2013-2015 Matt Rogers <mrogers@redhat.com>
+ * Copyright (C) 2013-2016 D. Hugh Redelmeier <hugh@mimosa.com>
+ * Copyright (C) 2014-2016 Antony Antony <antony@phenome.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -30,7 +33,6 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <resolv.h>
-#include <sys/time.h>           /* for gettimeofday */
 
 #include <libreswan.h>
 
@@ -45,7 +47,6 @@
 #include "keys.h"
 #include "packet.h"
 #include "demux.h"      /* needs packet.h */
-#include "dnskey.h"     /* needs keys.h and adns.h */
 #include "kernel.h"     /* needs connections.h */
 #include "log.h"
 #include "cookie.h"
@@ -55,12 +56,15 @@
 #include "rnd.h"
 #include "ipsec_doi.h"  /* needs demux.h and state.h */
 #include "whack.h"
-
+#include "ip_address.h"
 #include "pending.h" /* for flush_pending_by_connection */
 
 #include "ikev1_dpd.h"
 #include "pluto_x509.h"
-/**
+
+#include "pluto_stats.h"
+
+/*
  * Initialize RFC 3706 Dead Peer Detection
  *
  * @param st An initialized state structure
@@ -106,7 +110,7 @@
  * The phase 2 dpd_init() will attempt to kill the phase 1 DPD_EVENT, if it
  * can, to reduce the amount of work.
  *
- * The st_last_dpd member which is used is always the one from the phase 1.
+ * The st_last_dpd member that is used is always the one from the phase 1.
  * So, if there are multiple phase 2s, then if any of them receive DPD data
  * they will update the st_last_dpd, so the test in #2 will avoid the traffic
  * for all by one phase 2.
@@ -151,12 +155,10 @@ stf_status dpd_init(struct state *st)
 	if (p1st->hidden_variables.st_peer_supports_dpd) {
 		DBG(DBG_DPD, DBG_log("Dead Peer Detection (RFC 3706): enabled"));
 		if (st->st_dpd_event == NULL || ev_before(st->st_dpd_event,
-					st->st_connection->dpd_delay)){
+					st->st_connection->dpd_delay)) {
 			if (st->st_dpd_event != NULL)
 				delete_dpd_event(st);
-			event_schedule(EVENT_DPD,
-					deltasecs(st->st_connection->dpd_delay),
-					st);
+			event_schedule(EVENT_DPD, st->st_connection->dpd_delay, st);
 		}
 	} else {
 		loglog(RC_LOG_SERIOUS,
@@ -185,7 +187,7 @@ static void dpd_sched_timeout(struct state *p1st, monotime_t nw, deltatime_t tim
 				     (long)deltasecs(timeout)));
 		if (p1st->st_dpd_event != NULL)
 			delete_dpd_event(p1st);
-		event_schedule(EVENT_DPD_TIMEOUT, deltasecs(timeout), p1st);
+		event_schedule(EVENT_DPD_TIMEOUT, timeout, p1st);
 	}
 }
 
@@ -198,10 +200,7 @@ static void dpd_sched_timeout(struct state *p1st, monotime_t nw, deltatime_t tim
 static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 		     deltatime_t delay, deltatime_t timeout)
 {
-	monotime_t nw;
-	monotime_t last;
-	deltatime_t nextdelay;
-	u_int32_t seqno;
+	uint32_t seqno;
 
 	DBG(DBG_DPD, {
 		char cib[CONN_INST_BUF];
@@ -211,22 +210,22 @@ static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 			fmt_conn_instance(st->st_connection, cib));
 	});
 
-	/* If no DPD, then get out of here */
+	/* if peer doesn't support DPD, DPD should never have started */
+	pexpect(st->hidden_variables.st_peer_supports_dpd);	/* ??? passert? */
 	if (!st->hidden_variables.st_peer_supports_dpd) {
-		DBG(DBG_DPD,
-		    DBG_log("DPD: peer does not support dpd"));
+		DBG(DBG_DPD, DBG_log("DPD: peer does not support dpd"));
 		return;
 	}
 
-	/* If there is no state, there can be no DPD */
+	/* If there is no IKE state, there can be no DPD */
+	pexpect(IS_ISAKMP_SA_ESTABLISHED(p1st->st_state));	/* ??? passert? */
 	if (!IS_ISAKMP_SA_ESTABLISHED(p1st->st_state)) {
-		DBG(DBG_DPD,
-		    DBG_log("DPD: no phase1 state, so no DPD"));
+		DBG(DBG_DPD, DBG_log("DPD: no phase1 state, so no DPD"));
 		return;
 	}
 
 	/* find out when now is */
-	nw = mononow();
+	monotime_t nw = mononow();
 
 	/*
 	 * pick least recent activity value, since with multiple phase 2s,
@@ -240,35 +239,35 @@ static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 	 *
 	 * ??? the code actually picks the most recent.  So much for comments.
 	 */
-	last = !monobefore(p1st->st_last_dpd, st->st_last_dpd) ?
+	monotime_t last = !monobefore(p1st->st_last_dpd, st->st_last_dpd) ?
 		p1st->st_last_dpd : st->st_last_dpd;
 
-	nextdelay = monotimediff(monotimesum(last, delay), nw);
+	monotime_t next_time = monotimesum(last, delay);
+	deltatime_t next_delay = monotimediff(next_time, nw);
 
 	/* has there been enough activity of late? */
-	if (deltasecs(nextdelay) > 0) {
+	if (deltatime_cmp(next_delay, deltatime(0)) > 0) {
 		/* Yes, just reschedule "phase 2" */
-		DBG(DBG_DPD,
-		    DBG_log("DPD: not yet time for dpd event: %ld < %ld",
-			    (long)nw.mono_secs,
-			    (long)(last.mono_secs + deltasecs(delay))));
-		event_schedule(EVENT_DPD, deltasecs(nextdelay), st);
+		LSWDBGP(DBG_DPD, buf) {
+			lswlogs(buf, "DPD: not yet time for dpd event: ");
+			lswlog_monotime(buf, nw);
+			lswlogs(buf, " < ");
+			lswlog_monotime(buf, next_time);
+		}
+		event_schedule(EVENT_DPD, next_delay, st);
 		return;
 	}
 
-	/* now plan next check time */
-	/* ??? this test is nuts: it will always succeed! */
-	if (deltasecs(nextdelay) < 1)
-		nextdelay = delay;
+	next_delay = delay;
 
 	/*
 	 * check the phase 2, if we are supposed to,
 	 * and return if it is active recently
 	 */
 	if (eroute_care && st->hidden_variables.st_nat_traversal == LEMPTY &&
-			!was_eroute_idle(st, delay)) {
-		DBG(DBG_DPD,
-		    DBG_log("DPD: out event not sent, phase 2 active"));
+			!was_eroute_idle(st, delay))
+	{
+		DBG(DBG_DPD, DBG_log("DPD: out event not sent, phase 2 active"));
 
 		/* update phase 2 time stamp only */
 		st->st_last_dpd = nw;
@@ -286,7 +285,7 @@ static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 			delete_dpd_event(p1st);
 		}
 
-		event_schedule(EVENT_DPD, deltasecs(nextdelay), st);
+		event_schedule(EVENT_DPD, next_delay, st);
 		return;
 	}
 
@@ -295,7 +294,7 @@ static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 		 * reschedule next event, since we cannot do it from the activity
 		 * routine.
 		 */
-		event_schedule(EVENT_DPD, deltasecs(nextdelay), st);
+		event_schedule(EVENT_DPD, next_delay, st);
 	}
 
 	if (p1st->st_dpd_seqno == 0) {
@@ -331,6 +330,7 @@ static void dpd_outI(struct state *p1st, struct state *st, bool eroute_care,
 	st->st_last_dpd = nw;
 	p1st->st_last_dpd = nw;
 	p1st->st_dpd_expectseqno = p1st->st_dpd_seqno++;
+	pstats_ike_dpd_sent++;
 }
 
 static void p1_dpd_outI1(struct state *p1st)
@@ -347,13 +347,19 @@ static void p2_dpd_outI1(struct state *p2st)
 	deltatime_t delay = p2st->st_connection->dpd_delay;
 	deltatime_t timeout = p2st->st_connection->dpd_timeout;
 
-	/* find the related Phase 1 state */
 	st = find_phase1_state(p2st->st_connection,
-			       ISAKMP_SA_ESTABLISHED_STATES);
+		ISAKMP_SA_ESTABLISHED_STATES);
 
 	if (st == NULL) {
 		loglog(RC_LOG_SERIOUS,
-		       "DPD: could not find newest phase 1 state");
+		       "DPD: could not find newest phase 1 state - initiating a new one");
+		liveness_action(p2st->st_connection, p2st->st_ikev2);
+		return;
+	}
+
+	if (st->st_connection->newest_ipsec_sa != p2st->st_serialno) {
+		DBG(DBG_DPD,
+		    DBG_log("DPD: no need to send or schedule DPD for replaced IPsec SA"));
 		return;
 	}
 
@@ -364,7 +370,9 @@ void dpd_event(struct state *st)
 {
 	passert(st != NULL);
 
-	if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))
+	set_cur_state(st);
+
+	if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state))
 		p1_dpd_outI1(st);
 	else
 		p2_dpd_outI1(st);
@@ -383,7 +391,7 @@ stf_status dpd_inI_outR(struct state *p1st,
 			pb_stream *pbs)
 {
 	monotime_t nw = mononow();
-	u_int32_t seqno;
+	uint32_t seqno;
 
 	if (!IS_ISAKMP_SA_ESTABLISHED(p1st->st_state)) {
 		loglog(RC_LOG_SERIOUS,
@@ -419,7 +427,7 @@ stf_status dpd_inI_outR(struct state *p1st,
 		return STF_FAIL + PAYLOAD_MALFORMED;
 	}
 
-	seqno = ntohl(*(u_int32_t *)pbs->cur);
+	seqno = ntohl(*(uint32_t *)pbs->cur);
 	if (p1st->st_dpd_peerseqno && seqno <= p1st->st_dpd_peerseqno) {
 		loglog(RC_LOG_SERIOUS,
 		       "DPD: received old or duplicate R_U_THERE");
@@ -444,15 +452,16 @@ stf_status dpd_inI_outR(struct state *p1st,
 		p1st->st_dpd_rdupcount = 0;
 	}
 
-	DBG(DBG_DPD, {
+	LSWDBGP(DBG_DPD, buf) {
+		lswlogf(buf, "DPD: received R_U_THERE seq:%u monotime:",
+			seqno);
+		lswlog_monotime(buf, nw);
 		char cib[CONN_INST_BUF];
-		DBG_log("DPD: received R_U_THERE seq:%u monotime:%ld (state=#%lu name=\"%s\"%s)",
-			seqno,
-			(long)nw.mono_secs,
+		lswlogf(buf, " (state=#%lu name=\"%s\"%s)",
 			p1st->st_serialno,
 			p1st->st_connection->name,
 			fmt_conn_instance(p1st->st_connection, cib));
-	});
+	};
 
 	p1st->st_dpd_peerseqno = seqno;
 
@@ -464,6 +473,8 @@ stf_status dpd_inI_outR(struct state *p1st,
 
 	/* update the time stamp */
 	p1st->st_last_dpd = nw;
+
+	pstats_ike_dpd_replied++;
 
 	/*
 	 * since there was activity, kill any EVENT_DPD_TIMEOUT that might
@@ -488,11 +499,11 @@ stf_status dpd_inR(struct state *p1st,
 		   struct isakmp_notification *const n,
 		   pb_stream *pbs)
 {
-	u_int32_t seqno;
+	uint32_t seqno;
 
 	if (!IS_ISAKMP_SA_ESTABLISHED(p1st->st_state)) {
 		loglog(RC_LOG_SERIOUS,
-		       "DPD: recevied R_U_THERE_ACK for unestablished ISKAMP SA");
+		       "DPD: received R_U_THERE_ACK for unestablished ISKAMP SA");
 		return STF_FAIL;
 	}
 
@@ -527,7 +538,7 @@ stf_status dpd_inR(struct state *p1st,
 		return STF_FAIL + PAYLOAD_MALFORMED;
 	}
 
-	seqno = ntohl(*(u_int32_t *)pbs->cur);
+	seqno = ntohl(*(uint32_t *)pbs->cur);
 	DBG(DBG_DPD,
 	    DBG_log("DPD: R_U_THERE_ACK, seqno received: %u expected: %u (state=#%lu)",
 		    seqno, p1st->st_dpd_expectseqno, p1st->st_serialno));
@@ -542,6 +553,8 @@ stf_status dpd_inR(struct state *p1st,
 		       seqno);
 		/* do not update time stamp, so we'll send a new one sooner */
 	}
+
+	pstats_ike_dpd_recv++;
 
 	/*
 	 * since there was activity, kill any EVENT_DPD_TIMEOUT that might
@@ -566,41 +579,7 @@ stf_status dpd_inR(struct state *p1st,
  */
 void dpd_timeout(struct state *st)
 {
-	struct connection *c = st->st_connection;
-	enum dpd_action action = c->dpd_action;
+	set_cur_state(st);
 
-	/** delete the state, which is probably in phase 2 */
-	set_cur_connection(c);
-
-	libreswan_log("DPD: No response from peer - declaring peer dead");
-
-	switch (action) {
-	case DPD_ACTION_HOLD:
-		/** dpdaction=hold - Wipe the SA's but %trap the eroute so we don't
-		    leak traffic.  Also, being in %trap means new packets will
-		    force an initiation of the conn again.  */
-		libreswan_log("DPD: Putting connection into %%trap");
-		if (c->kind == CK_INSTANCE) {
-			DBG(DBG_DPD,
-			    DBG_log("DPD: warning dpdaction=hold on instance futile - will be deleted"));
-		}
-		delete_states_by_connection(c, TRUE);
-		break;
-
-	case DPD_ACTION_CLEAR:
-		/** dpdaction=clear - Wipe the SA & eroute - everything */
-		liveness_clear_connection(c, "IKEv1 DPD action");
-		break;
-
-	case DPD_ACTION_RESTART:
-		/* dpdaction=restart - immediately renegotiate connections to the same peer. */
-		libreswan_log(
-			"DPD: Restarting all connections that share this peer");
-		restart_connections_by_peer(c);
-		break;
-
-	default:
-		bad_case(action);
-	}
-	reset_cur_connection();
+	liveness_action(st->st_connection, st->st_ikev2);
 }
