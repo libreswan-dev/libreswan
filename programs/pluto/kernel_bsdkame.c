@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -27,9 +27,10 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
+#include <libreswan.h>
 #include <net/pfkeyv2.h>
+#include <netipsec/keydb.h>
 #include <netinet/in.h>
-#include <netipsec/ipsec.h>
 #include "libbsdkame/libpfkey.h"         /* this is a copy of a freebsd libipsec/ file */
 
 #include "sysdep.h"
@@ -47,14 +48,16 @@
 #include "whack.h"      /* for RC_LOG_SERIOUS */
 #include "packet.h"     /* for pb_stream in nat_traversal.h */
 #include "nat_traversal.h"
+
 #include "alg_info.h"
 #include "kernel_alg.h"
-#include "kernel_sadb.h"
+
+#ifndef DEFAULT_UPDOWN
+# define DEFAULT_UPDOWN "ipsec _updown"
+#endif
 
 int pfkeyfd = NULL_FD;
 unsigned int pfkey_seq = 1;
-bool nat_traversal_support_port_floating;
-
 
 typedef struct pfkey_item {
 	TAILQ_ENTRY(pfkey_item) list;
@@ -74,14 +77,14 @@ static void bsdkame_init_pfkey(void)
 	pfkeyfd = socket(PF_KEY, SOCK_RAW, PF_KEY_V2);
 
 	if (pfkeyfd == -1)
-		EXIT_LOG_ERRNO(errno, "socket() in init_pfkeyfd()");
+		exit_log_errno((e, "socket() in init_pfkeyfd()"));
 
 #ifdef NEVER    /* apparently unsupported! */
 	if (fcntl(pfkeyfd, F_SETFL, O_NONBLOCK) != 0)
-		EXIT_LOG_ERRNO(errno, "fcntl(O_NONBLOCK) in init_pfkeyfd()");
+		exit_log_errno((e, "fcntl(O_NONBLOCK) in init_pfkeyfd()"));
 #endif
 	if (fcntl(pfkeyfd, F_SETFD, FD_CLOEXEC) != 0)
-		EXIT_LOG_ERRNO(errno, "fcntl(FD_CLOEXEC) in init_pfkeyfd()");
+		exit_log_errno((e, "fcntl(FD_CLOEXEC) in init_pfkeyfd()"));
 
 	DBG(DBG_KERNEL,
 	    DBG_log("process %u listening for PF_KEY_V2 on file descriptor %d",
@@ -267,7 +270,8 @@ static bool bsdkame_do_command(const struct connection *c, const struct spd_rout
 			   "%s",        /* actual script */
 			   verb, verb_suffix,
 			   common_shell_out_str,
-			   sr->this.updown)) {
+			   sr->this.updown == NULL ?
+			       DEFAULT_UPDOWN : sr->this.updown)) {
 		loglog(RC_LOG_SERIOUS, "%s%s command too long!", verb,
 		       verb_suffix);
 		return FALSE;
@@ -279,38 +283,42 @@ static bool bsdkame_do_command(const struct connection *c, const struct spd_rout
 static void bsdkame_algregister(int satype, int supp_exttype,
 				struct sadb_alg *alg)
 {
-	switch (satype) {
+	int ret;
 
+	switch (satype) {
 	case SADB_SATYPE_AH:
-		kernel_add_sadb_alg(satype, supp_exttype, alg);
+		ret = kernel_alg_add(satype, supp_exttype, alg);
 		DBG(DBG_KERNEL,
-		    DBG_log("algregister_ah(%p) exttype=%d alg_id=%d, alg_ivlen=%d, alg_minbits=%d, alg_maxbits=%d",
+		    DBG_log("algregister_ah(%p) exttype=%d alg_id=%d, alg_ivlen=%d, alg_minbits=%d, alg_maxbits=%d, ret=%d",
 			    alg, supp_exttype,
 			    alg->sadb_alg_id,
 			    alg->sadb_alg_ivlen,
 			    alg->sadb_alg_minbits,
-			    alg->sadb_alg_maxbits));
+			    alg->sadb_alg_maxbits,
+			    ret));
 		break;
 
 	case SADB_SATYPE_ESP:
-		kernel_add_sadb_alg(satype, supp_exttype, alg);
+		ret = kernel_alg_add(satype, supp_exttype, alg);
 		DBG(DBG_KERNEL,
-			DBG_log("algregister(%p) alg_id=%d, alg_ivlen=%d, alg_minbits=%d, alg_maxbits=%d",
+			DBG_log("algregister(%p) alg_id=%d, alg_ivlen=%d, alg_minbits=%d, alg_maxbits=%d, ret=%d",
 				alg,
 				alg->sadb_alg_id,
 				alg->sadb_alg_ivlen,
 				alg->sadb_alg_minbits,
-				alg->sadb_alg_maxbits));
+				alg->sadb_alg_maxbits,
+				ret));
 		break;
 
 	case SADB_X_SATYPE_IPCOMP:
 		DBG(DBG_KERNEL,
-			DBG_log("ipcomp algregister(%p) alg_id=%d, alg_ivlen=%d, alg_minbits=%d, alg_maxbits=%d",
+			DBG_log("ipcomp algregister(%p) alg_id=%d, alg_ivlen=%d, alg_minbits=%d, alg_maxbits=%d, ret=%d",
 				alg,
 				alg->sadb_alg_id,
 				alg->sadb_alg_ivlen,
 				alg->sadb_alg_minbits,
-				alg->sadb_alg_maxbits));
+				alg->sadb_alg_maxbits,
+				ret));
 		can_do_IPcomp = TRUE;
 		break;
 
@@ -382,7 +390,7 @@ static void bsdkame_dequeue(void)
 }
 
 /* asynchronous messages directly from PF_KEY socket */
-static void bsdkame_process_msg(int i UNUSED)
+static void bsdkame_event(void)
 {
 	struct sadb_msg *reply = pfkey_recv(pfkeyfd);
 
@@ -417,15 +425,14 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 			       const ip_subnet *this_client,
 			       const ip_address *that_host,
 			       const ip_subnet *that_client,
-			       ipsec_spi_t cur_spi,
-			       ipsec_spi_t new_spi UNUSED,
+			       ipsec_spi_t spi,
 			       int sa_proto,
 			       unsigned int transport_proto,
 			       enum eroute_type esatype UNUSED,
 			       const struct pfkey_proto_info *proto_info UNUSED,
 			       deltatime_t use_lifetime UNUSED,
 			       uint32_t sa_priority UNUSED,
-			       const struct sa_marks *sa_marks UNUSED,
+			       const struct sa_mark *sa_mark UNUSED,
 			       enum pluto_sadb_operations op,
 			       const char *text_said UNUSED
 #ifdef HAVE_LABELED_IPSEC
@@ -444,7 +451,7 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 	int ret;
 	int policy = -1;
 
-	switch (cur_spi) {
+	switch (spi) {
 	case 0:
 		/* we're supposed to end up with no eroute: rejig op and opname */
 		switch (op) {
@@ -485,7 +492,7 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 		break;
 
 	default:
-		DBG_log("shunt_eroute called with cur_spi=%08x", cur_spi);
+		DBG_log("shunt_eroute called with spi=%08x", spi);
 		policy = IPSEC_POLICY_IPSEC;
 	}
 
@@ -504,7 +511,7 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 
 	policylen = sizeof(*policy_struct);
 
-	switch (sa_proto) {
+	switch (proto) {
 	case IPPROTO_ESP:
 	case IPPROTO_AH:
 	case IPPROTO_IPCOMP:
@@ -512,7 +519,7 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 
 	default:
 		DBG_log("bsdkame_raw_eroute not installing eroute to proto=%d",
-			sa_proto);
+			proto);
 		return TRUE;
 	}
 
@@ -526,9 +533,9 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 		ir->sadb_x_ipsecrequest_len =
 			sizeof(struct sadb_x_ipsecrequest) + me.u.v4.sin_len +
 			him.u.v4.sin_len;
-		ir->sadb_x_ipsecrequest_proto = sa_proto;
+		ir->sadb_x_ipsecrequest_proto = proto;
 
-		if (sa_proto == ET_IPIP)
+		if (proto == ET_IPIP)
 			ir->sadb_x_ipsecrequest_mode = IPSEC_MODE_TUNNEL;
 		else
 			ir->sadb_x_ipsecrequest_mode = IPSEC_MODE_TRANSPORT;
@@ -564,8 +571,9 @@ static bool bsdkame_raw_eroute(const ip_address *this_host,
 	bsdkame_consume_pfkey(pfkeyfd, pfkey_seq);
 
 	if (ret < 0) {
-		DBG_log("ret = %d from send_spdadd: %s addr=%p/%p seq=%u opname=eroute", ret,
-			ipsec_strerror(),
+		extern int __ipsec_errcode;
+		DBG_log("ret = %d from send_spdadd: %d (%s) addr=%p/%p seq=%u opname=eroute", ret,
+			__ipsec_errcode, ipsec_strerror(),
 			saddr, daddr, pfkey_seq);
 		return FALSE;
 	}
@@ -674,8 +682,8 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 	case ERO_REPLACE:
 	case ERO_ADD:
 	{
-		const ip_subnet *mine   = &sr->this.client;
-		const ip_subnet *his    = &sr->that.client;
+		ip_subnet *mine   = &sr->this.client;
+		ip_subnet *his    = &sr->that.client;
 		const struct sockaddr *saddr =
 			(const struct sockaddr *)&mine->addr;
 		const struct sockaddr *daddr =
@@ -694,12 +702,8 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 		zero(&pbuf);	/* OK: no pointer fields */
 
 		/* XXX need to fix this for v6 */
-#if 1
-		DBGF(DBG_MASK, "blatting mine/his sin_len");
-#else
 		mine->addr.u.v4.sin_len  = sizeof(struct sockaddr_in);
 		his->addr.u.v4.sin_len   = sizeof(struct sockaddr_in);
-#endif
 
 		passert(policy != -1);
 
@@ -711,17 +715,13 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 		policylen = sizeof(*policy_struct);
 
 		if (policy == IPSEC_POLICY_IPSEC) {
-			const ip_address *me   = &sr->this.host_addr;
-			const ip_address *him  = &sr->that.host_addr;
+			ip_address *me   = &sr->this.host_addr;
+			ip_address *him  = &sr->that.host_addr;
 			unsigned char *addrmem;
 
 			/* should be already filled in */
-#if 1
-			DBGF(DBG_MASK, "blatting me/him sin_len");
-#else
 			me->u.v4.sin_len  = sizeof(struct sockaddr_in);
 			him->u.v4.sin_len  = sizeof(struct sockaddr_in);
-#endif
 
 			ir = (struct sadb_x_ipsecrequest *)&policy_struct[1];
 
@@ -773,8 +773,9 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 		bsdkame_consume_pfkey(pfkeyfd, pfkey_seq);
 
 		if (ret < 0) {
-			DBG_log("ret = %d from send_spdadd: %s addr=%p/%p seq=%u opname=%s", ret,
-				ipsec_strerror(),
+			extern int __ipsec_errcode;
+			DBG_log("ret = %d from send_spdadd: %d (%s) addr=%p/%p seq=%u opname=%s", ret,
+				__ipsec_errcode, ipsec_strerror(),
 				saddr, daddr, pfkey_seq, opname);
 			return FALSE;
 		}
@@ -784,8 +785,8 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 	case ERO_DELETE:
 	{
 		/* need to send a delete message */
-		const ip_subnet *mine   = &sr->this.client;
-		const ip_subnet *his    = &sr->that.client;
+		ip_subnet *mine   = &sr->this.client;
+		ip_subnet *his    = &sr->that.client;
 		const struct sockaddr *saddr =
 			(const struct sockaddr *)&mine->addr;
 		const struct sockaddr *daddr =
@@ -803,12 +804,8 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 			 "eroute_connection %s", opname);
 
 		/* XXX need to fix this for v6 */
-#if 1
-		DBGF(DBG_MASK, "blatting mine/his sin_len");
-#else
 		mine->addr.u.v4.sin_len  = sizeof(struct sockaddr_in);
 		his->addr.u.v4.sin_len   = sizeof(struct sockaddr_in);
-#endif
 
 		policy_struct->sadb_x_policy_exttype = SADB_X_EXT_POLICY;
 
@@ -832,8 +829,9 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
 		bsdkame_consume_pfkey(pfkeyfd, pfkey_seq);
 
 		if (ret < 0) {
-			DBG_log("ret = %d from send_spdadd: %s addr=%p/%p seq=%u opname=%s", ret,
-				ipsec_strerror(),
+			extern int __ipsec_errcode;
+			DBG_log("ret = %d from send_spdadd: %d (%s) addr=%p/%p seq=%u opname=%s", ret,
+				__ipsec_errcode, ipsec_strerror(),
 				saddr, daddr, pfkey_seq, opname);
 			return FALSE;
 		}
@@ -861,7 +859,7 @@ static bool bsdkame_shunt_eroute(const struct connection *c,
  */
 static bool bsdkame_sag_eroute(const struct state *st,
 			       const struct spd_route *sr,
-			       enum pluto_sadb_operations op UNUSED,
+			       unsigned op UNUSED,
 			       const char *opname UNUSED)
 {
 	int proto;
@@ -875,31 +873,20 @@ static bool bsdkame_sag_eroute(const struct state *st,
 		proto = IPPROTO_ESP;
 	else if (st->st_ipcomp.present)
 		proto = IPPROTO_COMP;
-
-#if 1
-	DBGF(DBG_MASK, "sr->*.port = ...");
-#else
-	if (!sr->this.has_port_wildcard)
-		setportof(htons(sr->this.port), &sr->this.client.addr);
-	if (!sr->that.has_port_wildcard)
-		setportof(htons(sr->that.port), &sr->that.client.addr);
-#endif
+	setup_client_ports(sr);
 
 	return bsdkame_raw_eroute(&sr->this.host_addr,
 				  &sr->this.client,
 				  &sr->that.host_addr,
 				  &sr->that.client,
-				  SPI_TRAP,	/* cur_spi */
-				  0,		/* new_spi */
+				  SPI_TRAP, /* Spi# not used in KAME/BSD */
 				  proto,
 				  sr->this.protocol,
 				  0,            /* esatype unused */
 				  NULL,         /* proto_info unused */
-				  deltatime(0),            /* use lifetime unused */
-				  0,		/* sa_priority */
-				  NULL,		/* sa_marks */
+				  0,            /* use lifetime unused */
 				  op,
-				  NULL          /* text_said unused */
+				  NULL          /* said unused */
 #ifdef HAVE_LABELED_IPSEC
 				  , NULL        /*unused*/
 #endif
@@ -944,7 +931,7 @@ static bool bsdkame_add_sa(const struct kernel_sa *sa, bool replace)
 
 	if ((sa->enckeylen + sa->authkeylen) > sizeof(keymat)) {
 		libreswan_log(
-			"Key material is too big for kernel interface: %d>%zu",
+			"Key material is too big for kernel interface: %d>%d",
 			(sa->enckeylen + sa->authkeylen),
 			sizeof(keymat));
 		return FALSE;
@@ -956,10 +943,10 @@ static bool bsdkame_add_sa(const struct kernel_sa *sa, bool replace)
 	memcpy(keymat + sa->enckeylen, sa->authkey, sa->authkeylen);
 
 	DBG(DBG_KERNEL,
-	    DBG_log("calling pfkey_send_x1 for pfkeyseq=%d encalg=%s/%d authalg=%s/%d spi=%08x, reqid=%u, satype=%d",
+	    DBG_log("calling pfkey_send_x1 for pfkeyseq=%d encalg=%d/%d authalg=%d/%d spi=%08x, reqid=%u, satype=%d",
 		    pfkey_seq,
-		    sa->encrypt->common.fqn, sa->enckeylen,
-		    sa->integ->common.fqn, sa->authkeylen,
+		    sa->encalg, sa->enckeylen,
+		    sa->authalg, sa->authkeylen,
 		    sa->spi, sa->reqid, satype));
 
 	ret = pfkey_send_x1(pfkeyfd, (replace ? SADB_UPDATE : SADB_ADD),
@@ -969,22 +956,23 @@ static bool bsdkame_add_sa(const struct kernel_sa *sa, bool replace)
 			    sa->reqid,  /* reqid */
 			    64,         /* wsize, replay window size */
 			    keymat,
-			    sa->encrypt->common.ikev1_esp_id,
+			    sa->encalg,
 			    sa->enckeylen,
-			    sa->integ->common.ikev1_esp_id,
+			    sa->authalg,
 			    sa->authkeylen,
 			    0,                  /*flags */
 			    0,                  /* l_alloc */
 			    0,                  /* l_bytes */
-			    deltasecs(sa->sa_lifetime),    /* l_addtime */
+			    sa->sa_lifetime,    /* l_addtime */
 			    0,                  /* l_usetime, */
 			    pfkey_seq);
 
 	bsdkame_consume_pfkey(pfkeyfd, pfkey_seq);
 
 	if (ret < 0) {
-		libreswan_log("ret = %d from add_sa: %s seq=%d", ret,
-			      ipsec_strerror(), pfkey_seq);
+		extern int __ipsec_errcode;
+		libreswan_log("ret = %d from add_sa: %d (%s) seq=%d", ret,
+			      __ipsec_errcode, ipsec_strerror(), pfkey_seq);
 		return FALSE;
 	}
 
@@ -1006,6 +994,14 @@ static bool bsdkame_was_eroute_idle(struct state *st UNUSED,
 {
 	passert(FALSE);
 	return FALSE;
+}
+
+static void bsdkame_set_debug(int cur_debug,
+			      libreswan_keying_debug_func_t debug_func,
+			      libreswan_keying_debug_func_t error_func UNUSED)
+{
+	bsdpfkey_lib_debug = (cur_debug & DBG_PFKEY ? 1 : 0);
+	pfkey_debug_func = debug_func;
 }
 
 static void bsdkame_remove_orphaned_holds(int transport_proto UNUSED,
@@ -1066,7 +1062,7 @@ const struct kernel_ops bsdkame_kernel_ops = {
 	.pfkey_register = bsdkame_pfkey_register,
 	.pfkey_register_response = bsdkame_pfkey_register_response,
 	.process_queue = bsdkame_dequeue,
-	.process_msg = bsdkame_process_msg,
+	.process_msg = bsdkame_event,
 	.raw_eroute = bsdkame_raw_eroute,
 	.shunt_eroute = bsdkame_shunt_eroute,
 	.sag_eroute = bsdkame_sag_eroute,
@@ -1076,13 +1072,13 @@ const struct kernel_ops bsdkame_kernel_ops = {
 	.get_spi = NULL,
 	.eroute_idle = bsdkame_was_eroute_idle,
 	.inbound_eroute = FALSE,
-	.scan_shunts = expire_bare_shunts,
+	.policy_lifetime = TRUE,
 	.init = bsdkame_init_pfkey,
 	.exceptsocket = bsdkame_except_socket,
 	.docommand = bsdkame_do_command,
+	.set_debug = bsdkame_set_debug,
 	.remove_orphaned_holds = bsdkame_remove_orphaned_holds,
 	.process_ifaces = bsdkame_process_raw_ifaces,
 	.overlap_supported = FALSE,
 	.sha2_truncbug_support = FALSE,
-	.v6holes = NULL,
 };

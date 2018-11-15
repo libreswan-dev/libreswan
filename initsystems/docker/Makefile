@@ -1,12 +1,8 @@
-ifndef top_srcdir
-include ../../mk/dirs.mk
-endif
-
 LIBRESWANSRCDIR?=$(shell cd ../..; pwd)
 SRCDIR?=${LIBRESWANSRCDIR}/initsystems/docker/
 
-INITDFILE=$(builddir)/ipsec.init
-SYSCONFIGFILE=$(builddir)/sysconfig.pluto
+INITDFILE=ipsec.init
+SYSCONFIGFILE=sysconfig.pluto
 SUBDIRS=
 INITDDIR=$(RCDIR)
 SYSCONFIGDIR=$(SYSCONFDIR)/sysconfig
@@ -14,27 +10,25 @@ SYSVINIT_DEFAULT_START?=
 
 include ${LIBRESWANSRCDIR}/Makefile.inc
 
-# Use dependencies to force the order.
-#
-# (Without this, since local-install-base depends local-base, rules
-# like local-base and installinitfiles and checkenabled are allowed to
-# run in parallel)
+programs:     initdfiles sysconfigfiles
+initdfiles:   $(INITDFILE)
+sysconfigfiles: $(SYSCONFIGFILE)
+install:      programs doinstall
+install-programs: doinstall
 
-local-base: $(INITDFILE) $(SYSCONFIGFILE)
+doinstall: programs installinitfiles installsysconfig checkenabled
 
-local-install-base: installinitfiles installsysconfig checkenabled
-
-installinitfiles: local-base
+installinitfiles:
 	mkdir -p $(INITDDIR)
 	$(INSTALL) $(INITDFILE) $(INITDDIR)/ipsec
 
-installsysconfig: local-base
+installsysconfig:
 	mkdir -p $(SYSCONFIGDIR)
 	if test ! -f $(SYSCONFIGDIR)/pluto ; then \
 		$(INSTALL) $(INSTCONFFLAGS) $(SYSCONFIGFILE) $(SYSCONFIGDIR)/pluto ; \
 	fi
 
-checkenabled: installinitfiles installsysconfig
+checkenabled:
 	@count=0 ; \
 	for dir in $(DESTDIR)/etc/rc?.d ; do \
 		if test -f $$dir/S??ipsec.init ; then \
@@ -48,13 +42,8 @@ checkenabled: installinitfiles installsysconfig
 		echo "**********************************************************************" ; \
 	fi
 
-# XXX: identical to program.mk?
-
-$(builddir)/%: $(srcdir)/%.in $(top_srcdir)/Makefile.inc $(top_srcdir)/Makefile.ver | $(builddir)
+%: ${SRCDIR}%.in ${LIBRESWANSRCDIR}/Makefile.inc ${LIBRESWANSRCDIR}/Makefile.ver
 	@echo  'IN' $< '->' $@
 	${TRANSFORM_VARIABLES} < $< | sed -e "s:@SYSVINIT_DEFAULT_START@:${SYSVINIT_DEFAULT_START}:g" > $@
 	@if [ -x $< ]; then chmod +x $@; fi
 	@if [ "${PROGRAM}.in" = $< ]; then chmod +x $@; fi
-
-include ${top_srcdir}/mk/targets.mk
-include ${top_srcdir}/mk/builddir.mk

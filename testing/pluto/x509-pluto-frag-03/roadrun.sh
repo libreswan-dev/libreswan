@@ -1,3 +1,3 @@
-ipsec whack --impair delete-on-retransmit
+ipsec whack --debug-all --impair-retransmits
 ipsec auto --up x509
 echo done

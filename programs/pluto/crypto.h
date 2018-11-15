@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -21,10 +21,36 @@
 #ifndef _CRYPTO_H
 #define _CRYPTO_H
 
+#ifdef USE_MD5
+#include "md5.h"
+#endif
+#ifdef USE_SHA1
+#include "sha1.h"
+#endif
+#ifdef USE_SHA2
+#include "sha2.h"
+#endif
+#include "aes_xcbc.h"
+
 #include <nss.h>
 #include <pk11pub.h>
 
 extern void init_crypto(void);
+
+/* Oakley group descriptions */
+
+struct oakley_group_desc {
+	u_int16_t group;
+	const char *gen;
+	const char *modp;
+	size_t bytes;
+};
+
+extern const struct oakley_group_desc unset_group;      /* magic signifier */
+extern const struct oakley_group_desc *lookup_group(u_int16_t group);
+const struct oakley_group_desc *next_oakley_group(const struct oakley_group_desc *);
+void get_oakley_group_param(const struct oakley_group_desc *,
+			    chunk_t *base, chunk_t *prime);
 
 /* unification of cryptographic encoding/decoding algorithms
  *
@@ -36,6 +62,16 @@ extern void init_crypto(void);
 
 #define MAX_OAKLEY_KEY_LEN_OLD  (3 * DES_CBC_BLOCK_SIZE)
 #define MAX_OAKLEY_KEY_LEN  (256 / BITS_PER_BYTE)
+
+struct state;   /* forward declaration, dammit */
+
+struct encrypt_desc;	/* forward */
+struct hash_desc;	/* forward */
+const struct encrypt_desc *crypto_get_encrypter(int alg);
+const struct hash_desc *crypto_get_hasher(oakley_hash_t alg);
+
+void crypto_cbc_encrypt(const struct encrypt_desc *e, bool enc, u_int8_t *buf,
+			size_t size, struct state *st);
 
 /* macros to manipulate IVs in state */
 
@@ -75,12 +111,24 @@ extern void init_crypto(void);
 	memcpy((st)->st_new_iv, (tmp), (tmp_len)); \
     }
 
+/* unification of cryptographic hashing mechanisms */
+
+union hash_ctx {
+	lsMD5_CTX ctx_md5;
+	SHA1_CTX ctx_sha1;
+#ifdef USE_SHA2
+	sha256_context ctx_sha256;
+	sha384_context ctx_sha384;
+	sha512_context ctx_sha512;
+#endif
+	aes_xcbc_context ctx_aes_xcbc;
+};
+
 /*
  * HMAC package (new code should use crypt_prf).
  */
 
 struct crypt_prf;
-struct prf_desc;        /* opaque */
 
 struct hmac_ctx {
 	struct crypt_prf *prf;
@@ -88,7 +136,7 @@ struct hmac_ctx {
 };
 
 extern void hmac_init(struct hmac_ctx *ctx,
-		      const struct prf_desc *prf_desc,
+		      const struct hash_desc *h,
 		      /*const*/ PK11SymKey *symkey);
 
 extern void hmac_update(struct hmac_ctx *ctx,
@@ -99,10 +147,23 @@ extern void hmac_update(struct hmac_ctx *ctx,
 
 extern void hmac_final(u_char *output, struct hmac_ctx *ctx);
 
-struct connection;
+#define hmac_final_chunk(ch, name, ctx) { \
+		pfreeany((ch).ptr); \
+		(ch).len = (ctx)->hmac_digest_len; \
+		(ch).ptr = alloc_bytes((ch).len, name); \
+		hmac_final((ch).ptr, (ctx)); \
+}
 
-void ike_alg_show_connection(const struct connection *c, const char *instance);
+extern CK_MECHANISM_TYPE nss_key_derivation_mech(const struct hash_desc *hasher);
 
-void ike_alg_show_status(void);
+enum crk_proto {
+	CRK_ESPorAH,
+	CRK_IKEv1,
+	CRK_IKEv2
+};
+
+extern int crypto_req_keysize(enum crk_proto ksproto, int algo);
+
+extern struct hash_desc crypto_hasher_sha1;	/* used by nat_traversal.c */
 
 #endif /* _CRYPTO_H */

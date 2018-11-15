@@ -2,18 +2,19 @@
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2002  D. Hugh Redelmeier.
  * Copyright (C) 2003 Herbert Xu.
- * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
+
+#ifdef KLIPS
 
 #include <errno.h>
 #include <fcntl.h>
@@ -50,7 +51,10 @@
 
 #include "alg_info.h"
 #include "kernel_alg.h"
-#include "ip_address.h"
+
+#ifndef DEFAULT_UPDOWN
+# define DEFAULT_UPDOWN "ipsec _updown"
+#endif
 
 static void klips_process_raw_ifaces(struct raw_iface *rifaces)
 {
@@ -61,13 +65,14 @@ static void klips_process_raw_ifaces(struct raw_iface *rifaces)
 	 */
 	for (ifp = rifaces; ifp != NULL; ifp = ifp->next) {
 		struct raw_iface *v = NULL;     /* matching ipsecX interface */
+		struct raw_iface fake_v;
 		bool after = FALSE;             /* has vfp passed ifp on the list? */
 		bool bad = FALSE;
 		struct raw_iface *vfp;
 		ip_address lip;
 
 		if (pluto_listen != NULL) {
-			err_t e = ttoaddr_num(pluto_listen, 0, AF_UNSPEC, &lip);
+			err_t e = ttoaddr(pluto_listen, 0, AF_UNSPEC, &lip);
 
 			if (e != NULL) {
 				DBG_log("invalid listen= option ignored: %s",
@@ -141,13 +146,26 @@ static void klips_process_raw_ifaces(struct raw_iface *rifaces)
 
 		/* what if we didn't find a virtual interface? */
 		if (v == NULL) {
-			DBG(DBG_CONTROL, {
-				ipstr_buf b;
+			if (kern_interface == NO_KERNEL) {
+				/* kludge for testing: invent a virtual device */
+				static const char fvp[] = "virtual";
+				fake_v = *ifp;
+				passert(sizeof(fake_v.name) > sizeof(fvp));
+				strcpy(fake_v.name, fvp);
+				addrtot(&ifp->addr, 0,
+					fake_v.name + sizeof(fvp) - 1,
+					sizeof(fake_v.name) -
+					(sizeof(fvp) - 1));
+				v = &fake_v;
+			} else {
+				DBG(DBG_CONTROL, {
+					ipstr_buf b;
 
-				DBG_log("IP interface %s %s has no matching ipsec* interface -- ignored",
-					ifp->name, ipstr(&ifp->addr, &b));
-			});
-			continue;
+					DBG_log("IP interface %s %s has no matching ipsec* interface -- ignored",
+						ifp->name, ipstr(&ifp->addr, &b));
+				});
+				continue;
+			}
 		}
 
 		/* ignore if --listen is specified and we do not match */
@@ -310,7 +328,8 @@ static bool klips_do_command(const struct connection *c, const struct spd_route 
 			   "%s",        /* actual script */
 			   verb, verb_suffix,
 			   common_shell_out_str,
-			   sr->this.updown)) {
+			   sr->this.updown == NULL ?
+			     DEFAULT_UPDOWN : sr->this.updown)) {
 		loglog(RC_LOG_SERIOUS, "%s%s command too long!", verb,
 		       verb_suffix);
 		return FALSE;
@@ -322,7 +341,6 @@ static bool klips_do_command(const struct connection *c, const struct spd_route 
 const struct kernel_ops klips_kernel_ops = {
 	.type = USE_KLIPS,
 	.async_fdp = &pfkeyfd,
-	.route_fdp = NULL,
 	.replay_window = 64,
 
 	.pfkey_register = klips_pfkey_register,
@@ -335,11 +353,10 @@ const struct kernel_ops klips_kernel_ops = {
 	.add_sa = pfkey_add_sa,
 	.grp_sa = pfkey_grp_sa,
 	.del_sa = pfkey_del_sa,
-	.get_sa = pfkey_get_sa,
 	.get_spi = NULL,
 	.eroute_idle = pfkey_was_eroute_idle,
 	.inbound_eroute = FALSE,
-	.scan_shunts = pfkey_scan_shunts,
+	.policy_lifetime = FALSE,
 	.init = init_pfkey,
 	.exceptsocket = NULL,
 	.docommand = klips_do_command,
@@ -349,5 +366,5 @@ const struct kernel_ops klips_kernel_ops = {
 	.kern_name = "klips",
 	.overlap_supported = FALSE,
 	.sha2_truncbug_support = TRUE,
-	.v6holes = NULL,
 };
+#endif /* KLIPS */

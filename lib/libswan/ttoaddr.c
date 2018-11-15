@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -14,12 +14,12 @@
  * License for more details.
  *
  */
+#include "internal.h"
+#include "libreswan.h"
 
-#include <string.h>
-
-#include "internal.h"		/* for MALLOC()!! */
-#include "ip_address.h"
-#include "libreswan.h"		/* for ttoul() */
+#if defined(__CYGWIN32__)
+#define gethostbyname2(X, Y) gethostbyname(X)
+#endif
 
 /*
  * Legal ASCII characters in a domain name.  Underscore technically is not,
@@ -178,9 +178,11 @@ static err_t tryname(
 	}
 
 	h = gethostbyname2(cp, af);
+#if !defined(__CYGWIN32__)
 	/* like, windows even has an /etc/networks? */
 	if (h == NULL && af == AF_INET)
 		ne = getnetbyname(cp);
+#endif
 	if (p != namebuf)
 		FREE(p);
 	if (h == NULL && ne == NULL) {
@@ -571,12 +573,12 @@ void regress(void)
 			continue;
 		}
 
-		if (oops != NULL) {
-			if (!r->expectfailure) {
-				printf("%u: '%s' failed to parse: %s\n",
-					count, r->input, oops);
-				status++;
-			}
+		if (oops) {
+			if (r->expectfailure)
+				continue;
+			printf("%u: '%s' failed to parse: %s\n",
+				count, r->input, oops);
+			status++;
 			continue;
 		}
 

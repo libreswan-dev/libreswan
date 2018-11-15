@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,11 +23,6 @@
 #include <limits.h>
 #include <assert.h>
 #include <sys/queue.h>
-
-#include "constants.h"
-#include "lswlog.h"
-#include "lmod.h"
-#include "ip_address.h"
 
 #include "ipsecconf/confread.h"
 #include "ipsecconf/confwrite.h"
@@ -56,18 +51,28 @@ void confwrite_list(FILE *out, char *prefix, int val, const struct keyword_def *
 static void confwrite_int(FILE *out,
 		   char   *side,
 		   unsigned int context,
+		   unsigned int keying_context,
 		   knf options,
 		   int_set options_set,
 		   ksf strings)
 {
 	const struct keyword_def *k;
 
-	for (k = ipsec_conf_keywords; k->keyname != NULL; k++) {
+	for (k = ipsec_conf_keywords_v2; k->keyname != NULL; k++) {
+
 		if ((k->validity & KV_CONTEXT_MASK) != context)
 			continue;
+		if (keying_context != 0 && (k->validity & keying_context) == 0)
+			continue;
 
-		/* do not output aliases or things handled elsewhere */
-		if (k->validity & (kv_alias | kv_policy | kv_processed))
+		/* do not output aliases */
+		if (k->validity & kv_alias)
+			continue;
+
+		/* do not output policy settings handled elsewhere */
+		if (k->validity & kv_policy)
+			continue;
+		if (k->validity & kv_processed)
 			continue;
 
 #if 0
@@ -92,6 +97,10 @@ static void confwrite_int(FILE *out,
 		case kt_idtype:
 		case kt_bitstring:
 			/* none of these are valid number types */
+			continue;
+
+		case kt_time:
+			/* special number, but do work later XXX */
 			break;
 
 		case kt_bool:
@@ -101,7 +110,7 @@ static void confwrite_int(FILE *out,
 				fprintf(out, "\t%s%s=%s\n", side,
 					k->keyname, options[k->field] ? "yes" : "no");
 			}
-			break;
+			continue;
 
 		case kt_enum:
 		case kt_loose_enum:
@@ -132,67 +141,64 @@ static void confwrite_int(FILE *out,
 					fprintf(out, "\n");
 				}
 			}
-			break;
+			continue;
 
 		case kt_list:
 			/* special enumeration */
 			if (options_set[k->field]) {
 				int val = options[k->field];
 
-				if (val != 0) {
-					fprintf(out, "\t%s%s=\"", side, k->keyname);
-					confwrite_list(out, "", val, k);
+				if (val == 0)
+					continue;
 
-					fprintf(out, "\"\n");
-				}
+				fprintf(out, "\t%s%s=\"", side, k->keyname);
+				confwrite_list(out, "", val, k);
+
+				fprintf(out, "\"\n");
 			}
-			break;
+			continue;
 
-		case kt_lset:
-			if (options_set[k->field]) {
-				unsigned long val = options[k->field];
-
-				if (val != 0) {
-					LSWLOG_FILE(out, buf) {
-						lswlogf(buf, "\t%s%s=\"", side, k->keyname);
-						lswlog_enum_lset_short(buf, k->info->names,
-								       ",", val);
-						lswlogf(buf, "\"");
-					}
-				}
-			}
+		case kt_number:
 			break;
 
 		case kt_comment:
-			break;
+			continue;
 
 		case kt_obsolete:
 		case kt_obsolete_quiet:
-			break;
-
-		case kt_time: /* special number, but do work later XXX */
-		case kt_number:
-			if (options_set[k->field])
-				fprintf(out, "\t%s%s=%d\n", side, k->keyname,
-					options[k->field]);
+			continue;
 		}
+
+		if (options_set[k->field])
+			fprintf(out, "\t%s%s=%d\n", side, k->keyname,
+				options[k->field]);
 	}
 }
 
 static void confwrite_str(FILE *out,
 		   char   *side,
 		   unsigned int context,
+		   unsigned int keying_context,
 		   ksf strings,
 		   str_set strings_set)
 {
 	const struct keyword_def *k;
 
-	for (k = ipsec_conf_keywords; k->keyname != NULL; k++) {
+	for (k = ipsec_conf_keywords_v2; k->keyname != NULL; k++) {
+
 		if ((k->validity & KV_CONTEXT_MASK) != context)
 			continue;
+		if (keying_context != 0 && (k->validity & keying_context) == 0)
+			continue;
 
-		/* do not output aliases or settings handled elsewhere */
-		if (k->validity & (kv_alias | kv_policy | kv_processed))
+		/* do not output aliases */
+		if (k->validity & kv_alias)
+			continue;
+
+		/* do not output policy settings handled elsewhere */
+		if (k->validity & kv_policy)
+			continue;
+		if (k->validity & kv_processed)
 			continue;
 
 		switch (k->type) {
@@ -200,24 +206,13 @@ static void confwrite_str(FILE *out,
 			if (strings_set[k->field])
 				fprintf(out, "\t%s%s={%s}\n", side, k->keyname,
 					strings[k->field]);
-			break;
+			continue;
 
 		case kt_string:
 		case kt_appendstring:
 		case kt_filename:
 		case kt_dirname:
 			/* these are strings */
-
-			if (strings_set[k->field]) {
-				const char *quote =
-					strchr(strings[k->field], ' ') == NULL ?
-						"" : "\"";
-
-				fprintf(out, "\t%s%s=%s%s%s\n", side, k->keyname,
-					quote,
-					strings[k->field],
-					quote);
-			}
 			break;
 
 		case kt_rsakey:
@@ -226,31 +221,42 @@ static void confwrite_str(FILE *out,
 		case kt_subnet:
 		case kt_idtype:
 		case kt_bitstring:
-			break;
+			continue;
 
 		case kt_bool:
 		case kt_invertbool:
 		case kt_enum:
 		case kt_list:
-		case kt_lset:
 		case kt_loose_enum:
 			/* special enumeration */
-			break;
+			continue;
 
 		case kt_time:
 			/* special number, not a string */
-			break;
+			continue;
 
 		case kt_percent:
 		case kt_number:
-			break;
+			continue;
 
 		case kt_comment:
-			break;
+			continue;
 
 		case kt_obsolete:
 		case kt_obsolete_quiet:
-			break;
+			continue;
+		}
+
+		if (strings_set[k->field]) {
+			char *quote = "";
+
+			if (strchr(strings[k->field], ' '))
+				quote = "\"";
+
+			fprintf(out, "\t%s%s=%s%s%s\n", side, k->keyname,
+				quote,
+				strings[k->field],
+				quote);
 		}
 	}
 }
@@ -339,13 +345,6 @@ static void confwrite_side(FILE *out,
 		}
 	}
 
-	if (!isanyaddr(&end->vti_ip.addr)) {
-			char as[ADDRTOT_BUF];
-
-			subnettot(&end->vti_ip, 0, as, sizeof(as));
-			fprintf(out, "\t%svti=%s\n", side, as);
-	}
-
 	if (end->rsakey1 != NULL && end->rsakey1[0] != '\0')
 		fprintf(out, "\t%srsasigkey=%s\n", side, end->rsakey1);
 
@@ -377,9 +376,9 @@ static void confwrite_side(FILE *out,
 	}
 
 	confwrite_int(out, side,
-		      kv_conn | kv_leftright,
+		      kv_conn | kv_leftright, kv_auto,
 		      end->options, end->options_set, end->strings);
-	confwrite_str(out, side, kv_conn | kv_leftright,
+	confwrite_str(out, side, kv_conn | kv_leftright, kv_auto,
 		      end->strings, end->strings_set);
 
 }
@@ -398,13 +397,13 @@ static void confwrite_comments(FILE *out, struct starter_conn *conn)
 	}
 }
 
-static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
+static void confwrite_conn(FILE *out,
+		    struct starter_conn *conn)
 {
 	/* short-cut for writing out a field (string-valued, indented, on its own line) */
 #	define cwf(name, value)	{ fprintf(out, "\t" name "=%s\n", (value)); }
 
-	if (verbose)
-		fprintf(out, "# begin conn %s\n", conn->name);
+	fprintf(out, "# begin conn %s\n", conn->name);
 
 	fprintf(out, "conn %s\n", conn->name);
 
@@ -423,10 +422,10 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 	confwrite_side(out, &conn->left,  "left");
 	confwrite_side(out, &conn->right, "right");
 	/* fprintf(out, "# confwrite_int:\n"); */
-	confwrite_int(out, "", kv_conn,
+	confwrite_int(out, "", kv_conn, kv_auto,
 		      conn->options, conn->options_set, conn->strings);
 	/* fprintf(out, "# confwrite_str:\n"); */
-	confwrite_str(out, "", kv_conn,
+	confwrite_str(out, "", kv_conn, kv_auto,
 		      conn->strings, conn->strings_set);
 	/* fprintf(out, "# confwrite_comments:\n"); */
 	confwrite_comments(out, conn);
@@ -467,11 +466,10 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 			 (POLICY_AUTHENTICATE | POLICY_ENCRYPT));
 		lset_t shunt_policy = (conn->policy & POLICY_SHUNT_MASK);
 		lset_t ikev2_policy = (conn->policy & POLICY_IKEV2_MASK);
-		lset_t ppk_policy = (conn->policy & (POLICY_PPK_ALLOW | POLICY_PPK_INSIST));
 		lset_t ike_frag_policy = (conn->policy & POLICY_IKE_FRAG_MASK);
 		static const char *const noyes[2 /*bool*/] = {"no", "yes"};
 		/* short-cuts for writing out a field that is a policy bit.
-		 * cwpbf flips the sense of the bit.
+		 * cwpbf flips the sense of teh bit.
 		 */
 #		define cwpb(name, p)  { cwf(name, noyes[(conn->policy & (p)) != LEMPTY]); }
 #		define cwpbf(name, p)  { cwf(name, noyes[(conn->policy & (p)) == LEMPTY]); }
@@ -509,11 +507,7 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 					abs = "never";
 					break;
 				}
-				if (conn->left.options[KNCF_AUTH] == k_unset ||
-						conn->right.options[KNCF_AUTH]
-						== k_unset) {
-					cwf("authby", abs);
-				}
+				cwf("authby", abs);
 			}
 
 			{
@@ -560,24 +554,6 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 					break;
 				}
 				cwf("ikev2", v2ps);
-			}
-
-			/* ppk= */
-			{
-				const char *p_ppk = "UNKNOWN";
-
-				switch (ppk_policy) {
-				case LEMPTY:
-					p_ppk = "no";
-					break;
-				case POLICY_PPK_ALLOW:
-					p_ppk = "permit";
-					break;
-				case POLICY_PPK_INSIST:
-					p_ppk = "insist";
-					break;
-				}
-				cwf("ppk", p_ppk);
 			}
 
 			/* esn= */
@@ -632,18 +608,18 @@ static void confwrite_conn(FILE *out, struct starter_conn *conn, bool verbose)
 		case POLICY_SHUNT_REJECT:
 			cwf("type", "reject");
 			break;
+
 		}
 
 #		undef cwpb
 #		undef cwpbf
 	}
 
-	if (verbose)
-		fprintf(out, "# end conn %s\n\n", conn->name);
+	fprintf(out, "# end conn %s\n\n", conn->name);
 #	undef cwf
 }
 
-void confwrite(struct starter_config *cfg, FILE *out, bool setup, char *name, bool verbose)
+void confwrite(struct starter_config *cfg, FILE *out)
 {
 	struct starter_conn *conn;
 
@@ -651,24 +627,20 @@ void confwrite(struct starter_config *cfg, FILE *out, bool setup, char *name, bo
 	/* fprintf(out, "\nversion 2.0\n\n"); */
 
 	/* output config setup section */
-	if (setup) {
-		fprintf(out, "config setup\n");
-		confwrite_int(out, "",
-		      kv_config,
+	fprintf(out, "config setup\n");
+	confwrite_int(out, "",
+		      kv_config, 0,
 		      cfg->setup.options, cfg->setup.options_set,
 		      cfg->setup.strings);
-		confwrite_str(out, "",
-		      kv_config,
+	confwrite_str(out, "",
+		      kv_config, 0,
 		      cfg->setup.strings, cfg->setup.strings_set);
 
-		fprintf(out, "\n\n");
-	}
+	fprintf(out, "\n\n");
 
 	/* output connections */
 	for (conn = cfg->conns.tqh_first; conn != NULL;
 	     conn = conn->link.tqe_next)
-		if (name == NULL || streq(name, conn->name))
-			confwrite_conn(out, conn, verbose);
-	if (verbose)
-		fprintf(out, "# end of config\n");
+		confwrite_conn(out, conn);
+	fprintf(out, "# end of config\n");
 }

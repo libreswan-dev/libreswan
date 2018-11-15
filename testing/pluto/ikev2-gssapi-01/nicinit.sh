@@ -7,4 +7,3 @@ iptables -L -n
 ipactl start
 sleep 5
 echo done.
-: ==== end ====

@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -18,9 +18,8 @@ from fab import utilsdir
 
 def _host_names():
     host_names = set()
-    # this failing is a disaster
-    output = subprocess.check_output([utilsdir.relpath("kvmhosts.sh")])
-    for host_name in output.decode("utf-8").splitlines():
+    status, output = subprocess.getstatusoutput(utilsdir.relpath("kvmhosts.sh"))
+    for host_name in output.splitlines():
         host_names.add(host_name)
     return host_names
 

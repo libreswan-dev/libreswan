@@ -1,7 +1,0 @@
-Run whack --globalstatus on an idle pluto
-
-Checks that the output is correctly formatted.  For instance:
-
-- no "NNN ..." prefix
-- no stray # magic
-

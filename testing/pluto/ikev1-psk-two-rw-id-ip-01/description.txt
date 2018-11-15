@@ -1,3 +1,0 @@
-Two roadwarrios, no NAT, using authby=secret with ID_IPv4
-
-This test ensures no regression in refine_host_connection

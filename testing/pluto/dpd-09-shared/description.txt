@@ -1,3 +1,0 @@
-This is an IKEv1 two connections, sharing IKE/Phase 1. One of them trigger dpd.
-
-dpdaction=restart

@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -20,7 +20,7 @@
  */
 
 /*
- * This file provides a set of #defines that may be tuned by various
+ * This file provides a set of #define's which may be tuned by various
  * people/configurations. It keeps all compile-time tunables in one place.
  *
  * This file should be included before all other IPsec kernel-only files.
@@ -56,7 +56,7 @@
 /* but machine memory and CPU constraints are not likely to tolerate */
 /* more than 3 digits.  The default is one digit. */
 /* Update: userland scripts get upset if they can't find "ipsec0", so */
-/* for now, no "0"-padding should be used (which would have been helpful) */
+/* for now, no "0"-padding should be used (which would have been helpful */
 /* to make text-searches work */
 #define IPSEC_DEV_FORMAT "ipsec%d"
 #define MAST_DEV_FORMAT "mast%d"

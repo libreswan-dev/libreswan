@@ -5,15 +5,15 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Library General Public
  * License for more details.
  */
-
-#include "ip_subnet.h"
+#include "internal.h"
+#include "libreswan.h"
 
 /*
  * initsubnet - initialize ip_subnet from address and count
@@ -34,7 +34,7 @@ ip_subnet *dst;
 	int die;
 
 	dst->addr = *addr;
-	n = addrbytesptr_write(&dst->addr, &p);
+	n = addrbytesptr(&dst->addr, &p);
 	if (n == 0)
 		return "unknown address family";
 
@@ -80,13 +80,13 @@ ip_subnet *dst;
  */
 err_t	/* NULL for success, else string literal */
 addrtosubnet(addr, dst)
-const ip_address *addr;
+const ip_address * addr;
 ip_subnet *dst;
 {
 	int n;
 
 	dst->addr = *addr;
-	n = addrlenof(&dst->addr);
+	n = addrbytesptr(&dst->addr, (unsigned char **)NULL);
 	if (n == 0)
 		return "unknown address family";
 

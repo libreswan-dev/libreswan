@@ -3,23 +3,12 @@
   <listitem>
 <para>how the two security gateways should authenticate each other;
 acceptable values are <emphasis remap='B'>rsasig</emphasis> (the default)
-for RSA authentication with SHA-1,
-<emphasis remap='B'>rsa-sha2</emphasis> for RSA-PSS digital signatures based
-authentication with SHA2-256,
-<emphasis remap='B'>rsa-sha2_384</emphasis> for RSA-PSS digital signatures based
-authentication with SHA2-384,
-<emphasis remap='B'>rsa-sha2_512</emphasis> for RSA-PSS digital signatures based
-authentication with SHA2-512,
+for RSA digital signatures based authentication,
 <emphasis remap='B'>secret</emphasis> for shared secrets (PSK) authentication,
 <emphasis remap='B'>secret|rsasig</emphasis> for either,
 <emphasis remap='B'>never</emphasis> if negotiation is never to be attempted
 or accepted (useful for shunt-only conns), and
 <emphasis remap='B'>null</emphasis> for null-authentication.
-</para>
-<para>
-If asymmetric authentication is requested, IKEv2 must be enabled, and the
-options <emphasis remap='B'>leftauth=</emphasis> and <emphasis remap='B'>rightauth=</emphasis>
-should be used instead of authby.
 </para>
 <para>
 Digital signatures are superior in every way to shared secrets. Especially
