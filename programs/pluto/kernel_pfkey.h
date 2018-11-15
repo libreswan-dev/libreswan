@@ -1,17 +1,20 @@
 /* declarations of routines that interface with the kernel's pfkey mechanism
  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
  * Copyright (C) 2003  Herbert Xu
+ * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
+
+#include "lswcdefs.h"
 
 #ifdef PFKEY
 extern void init_pfkey(void);
@@ -23,7 +26,7 @@ extern void pfkey_close(void);
 extern void pfkey_register_response(const struct sadb_msg *msg);
 #endif
 extern void pfkey_dequeue(void);
-extern void pfkey_event(void);
+extern void pfkey_event(int);
 #ifdef KLIPS
 extern void klips_pfkey_register(void);
 #endif
@@ -31,6 +34,7 @@ extern bool pfkey_add_sa(const struct kernel_sa *sa, bool replace);
 extern bool pfkey_grp_sa(const struct kernel_sa *sa0,
 			 const struct kernel_sa *sa1);
 extern bool pfkey_del_sa(const struct kernel_sa *sa);
+extern bool pfkey_get_sa(const struct kernel_sa *sa, uint64_t *bytes, uint64_t *add_time);
 extern bool pfkey_sag_eroute(const struct state *st, const struct spd_route *sr,
 			     unsigned op, const char *opname);
 extern bool pfkey_was_eroute_idle(struct state *st, deltatime_t idle_max);
@@ -71,10 +75,6 @@ extern void pfkey_scan_shunts(void);
 
 extern int pfkeyfd;
 
-extern int bare_shunt_interval;
+extern err_t pfkey_mobike_check(struct state *st);
 
 #endif /* PFKEY */
-
-#ifdef NETKEY_SUPPORT
-extern void netlink_register_proto(unsigned satype, const char *satypename);
-#endif

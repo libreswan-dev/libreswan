@@ -16,7 +16,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -567,7 +567,7 @@ static enum ipsec_rcv_value ipsec_rcv_decap_ipip(struct ipsec_rcv_state *irs)
 		    AF_INET6)
 			psin6 = (struct sockaddr_in6*)(ipsp->ips_addr_s);
 		else if (((struct sockaddr_in*)(ipsp->ips_addr_s))->sin_family
-			 == AF_INET6)
+			 == AF_INET)
 			psin = (struct sockaddr_in*)(ipsp->ips_addr_s);
 		if ((psin && ipp->saddr != psin->sin_addr.s_addr)
 #ifdef CONFIG_KLIPS_IPV6
@@ -749,7 +749,7 @@ static enum ipsec_rcv_value ipsec_rcv_decap_ipip(struct ipsec_rcv_state *irs)
 		char sflow_txt[SUBNETTOA_BUF], dflow_txt[SUBNETTOA_BUF];
 
 #ifdef CONFIG_KLIPS_IPV6
-		if (ipsp->ips_flow_s.u.v4.sin_family == AF_INET6) {
+		if (ipsp->ips_flow_s.u.v6.sin6_family == AF_INET6) {
 			subnet6toa(&ipsp->ips_flow_s.u.v6.sin6_addr,
 				   &ipsp->ips_mask_s.u.v6.sin6_addr,
 				   0, sflow_txt, sizeof(sflow_txt));
@@ -974,11 +974,11 @@ static enum ipsec_rcv_value ipsec_rcv_init(struct ipsec_rcv_state *irs)
 			skb->dev->name ? skb->dev->name : "NULL");
 	KLIPS_PRINTMORE(debug_rcv, "\n");
 
-	if ( (irs->proto != IPPROTO_AH) &&
+	if (irs->proto != IPPROTO_AH &&
 #ifdef CONFIG_KLIPS_IPCOMP_disabled_until_we_register_IPCOMP_HANDLER
-	     (irs->proto != IPPROTO_COMP) &&
+	    irs->proto != IPPROTO_COMP &&
 #endif	/* CONFIG_KLIPS_IPCOMP */
-	     (irs->proto != IPPROTO_ESP) ) {
+	    irs->proto != IPPROTO_ESP) {
 		KLIPS_PRINT(debug_rcv & DB_RX_IPSA,
 			    "klips_debug:ipsec_rcv_init: Why the hell is someone "
 			    "passing me a non-ipsec irs->proto = %d packet? -- dropped.\n",
@@ -1103,10 +1103,10 @@ static enum ipsec_rcv_value ipsec_rcv_decap_lookup(struct ipsec_rcv_state *irs)
 
 	if (lsw_ip_hdr_version(irs) == 6) {
 		irs->said.dst.u.v6.sin6_addr = lsw_ip6_hdr(irs)->daddr;
-		irs->said.dst.u.v6.sin6_family = AF_INET6;
+		SET_V6(irs->said.dst);
 	} else {
 		irs->said.dst.u.v4.sin_addr.s_addr = lsw_ip4_hdr(irs)->daddr;
-		irs->said.dst.u.v4.sin_family = AF_INET;
+		SET_V4(irs->said.dst);
 	}
 
 	/* note: rcv_checks set up the said.spi value, if appropriate */
@@ -1168,7 +1168,7 @@ static enum ipsec_rcv_value ipsec_rcv_auth_init(struct ipsec_rcv_state *irs)
 		    == AF_INET6)
 			psin6 = (struct sockaddr_in6*)(newipsp->ips_addr_s);
 		else if (((struct sockaddr_in*)(newipsp->ips_addr_s))->
-			 sin_family == AF_INET6)
+			 sin_family == AF_INET)
 			psin = (struct sockaddr_in*)(newipsp->ips_addr_s);
 		if ((psin && lsw_ip4_hdr(irs)->saddr !=
 		     psin->sin_addr.s_addr) ||
@@ -1335,7 +1335,6 @@ static enum ipsec_rcv_value ipsec_rcv_auth_decap(struct ipsec_rcv_state *irs)
 				 irs->sa, ipsec_life_countbased,
 				 ipsec_incoming,
 				 irs->ipsp) == ipsec_life_harddied) {
-
 		/*
 		 * disconnect SA from the hash table, so it cannot be
 		 * found again.
@@ -1368,7 +1367,7 @@ static enum ipsec_rcv_value ipsec_rcv_auth_decap(struct ipsec_rcv_state *irs)
 	/*
 	 *
 	 * XXX we should ONLY update pluto if the SA passes all checks,
-	 *     which we clearly do not now.
+	 *     which we clearly {do not know | don't do now}.
 	 */
 	if (irs->natt_type != 0 &&
 	    (irs->ipp->saddr !=
@@ -1794,8 +1793,7 @@ static enum ipsec_rcv_value ipsec_rcv_decap_cont(struct ipsec_rcv_state *irs)
 	irs->ipsp->ips_life.ipl_usetime.ipl_last = jiffies / HZ;
 	irs->ipsp->ips_life.ipl_packets.ipl_count += 1;
 
-#if defined(CONFIG_KLIPS_COMPAT_NAT_NFMARK)
-#if defined(CONFIG_NETFILTER)
+#if defined(CONFIG_KLIPS_COMPAT_NAT_NFMARK) && defined(CONFIG_NETFILTER)
 	if (irs->proto == IPPROTO_ESP || irs->proto == IPPROTO_AH) {
 		skb->nfmark = IPSEC_NFMARK_IS_SAREF_BIT |
 			      (skb->nfmark &
@@ -1807,7 +1805,6 @@ static enum ipsec_rcv_value ipsec_rcv_decap_cont(struct ipsec_rcv_state *irs)
 			    irs->proto == IPPROTO_ESP ? "ESP" : "AH",
 			    (unsigned)skb->nfmark);
 	}
-#endif	/* CONFIG_NETFILTER */
 #endif
 	/* do we need to do more decapsulation */
 	if ((irs->proto == IPPROTO_ESP ||
@@ -2142,7 +2139,7 @@ int ipsec_rcv(struct sk_buff *skb
 
 #if defined(CONFIG_IPSEC_NAT_TRAVERSAL) && !defined(NET_26)
 	{
-		/* NET_26 NAT-T is handled by seperate function */
+		/* NET_26 NAT-T is handled by separate function */
 		struct sk_buff *nskb;
 		int udp_decap_ret = 0;
 

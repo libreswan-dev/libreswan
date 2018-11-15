@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -13,20 +13,27 @@
 # for more details.
 
 # list of files requiring dependency generation
-ifndef MK_DEPEND_FILES
-$(error define MK_DEPEND_FILES)
+ifndef OBJS
+$(error define OBJS)
 endif
 # cflags for this variant of the compile comand
-ifndef MK_DEPEND_CFLAGS
-$(error define MK_DEPEND_CFLAGS)
+ifndef CFLAGS
+$(error define CFLAGS)
 endif
 
 # In addition to compiling the .c file to .o, generate a dependency
 # file.  Force all output to the build directory.  $(basename
 # $(notdir)) is an approximation of UNIX basename.
+#
+# -MP: add a fake header target for when a header is deleted
+# -MMD: only list user header files
+# -MT: the target (otherwise $(builddir)/$(notdir $@) is used
+# -MF: where to write the dependency
+
 .c.o:
-	$(CC) $(MK_DEPEND_CFLAGS) \
-		-MMD -MF $(builddir)/$(basename $(notdir $@)).d \
+	$(CC) $(CFLAGS) \
+		-MF $(builddir)/$(basename $(notdir $@)).d \
+		-MP -MMD -MT $@ \
 		-o $(builddir)/$(notdir $@) \
 		-c $(abspath $<)
 
@@ -38,10 +45,10 @@ mk.depend.file := $(lastword $(MAKEFILE_LIST))
 mk.depend.dependencies.file := $(builddir)/Makefile.depend.mk
 $(mk.depend.dependencies.file): $(srcdir)/Makefile $(mk.depend.file) | $(builddir)
 	set -e ; \
-	for f in $(MK_DEPEND_FILES) ; do \
+	for f in $(OBJS) ; do \
 		case $$f in \
-			*.c ) echo "-include $$(basename $$f .c).d # $$f" ;; \
-			*.o ) echo "-include $$(basename $$f .o).d # $$f" ;; \
+			*.c ) echo "-include \$$(builddir)/$$(basename $$f .c).d # $$f" ;; \
+			*.o ) echo "-include \$$(builddir)/$$(basename $$f .o).d # $$f" ;; \
 			* ) echo "# $$f ignored by Makefile.dep" ;; \
 		esac ; \
 	done > $@.tmp
@@ -54,4 +61,3 @@ mk.depend.clean:
 	rm -f $(builddir)/*.d
 
 -include $(mk.depend.dependencies.file)
-

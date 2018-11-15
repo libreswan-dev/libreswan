@@ -12,12 +12,12 @@
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
  * Copyright (C) 2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2015 Paul Wouters <pwouters@redhat.com>
- * Copyright (C) 2015 Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2015,2017 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -65,131 +65,108 @@
 #include <keyhi.h>
 #include "lswnss.h"
 
+struct dh_secret {
+	const struct oakley_group_desc *group;
+	SECKEYPrivateKey *privk;
+	SECKEYPublicKey *pubk;
+};
+
+static void lswlog_dh_secret(struct lswlog *buf, struct dh_secret *secret)
+{
+	lswlogf(buf, "DH secret %s@%p: ",
+		secret->group->common.name, secret);
+}
+
+struct dh_secret *calc_dh_secret(const struct oakley_group_desc *group,
+				 chunk_t *local_ke)
+{
+	chunk_t ke = alloc_chunk(group->bytes, "local ke");
+	SECKEYPrivateKey *privk;
+	SECKEYPublicKey *pubk;
+	group->dh_ops->calc_secret(group, &privk, &pubk,
+				      ke.ptr, ke.len);
+	passert(privk != NULL);
+	passert(pubk != NULL);
+	*local_ke = ke;
+	struct dh_secret *secret = alloc_thing(struct dh_secret, "DH secret");
+	secret->group = group;
+	secret->privk = privk;
+	secret->pubk = pubk;
+	LSWDBGP(DBG_CRYPT, buf) {
+		lswlog_dh_secret(buf, secret);
+		lswlogs(buf, "created");
+	}
+	return secret;
+}
+
 /** Compute DH shared secret from our local secret and the peer's public value.
  * We make the leap that the length should be that of the group
  * (see quoted passage at start of ACCEPT_KE).
  * If there is something that upsets NSS (what?) we will return NULL.
  */
 /* MUST BE THREAD-SAFE */
-PK11SymKey *calc_dh_shared(const chunk_t g,	/* converted to SECItem */
-			   /*const*/ SECKEYPrivateKey *privk,	/* NSS doesn't do const */
-			   const struct oakley_group_desc *group,
-			   const SECKEYPublicKey *local_pubk, const char **story)
+PK11SymKey *calc_dh_shared(struct dh_secret *secret,
+			   chunk_t remote_ke)
 {
-	SECStatus status;
-
-	DBG(DBG_CRYPT,
-		DBG_log("Started DH shared-secret computation in NSS:"));
-
-	PRArenaPool *arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
-	passert(arena != NULL);
-
-	SECKEYPublicKey *remote_pubk = (SECKEYPublicKey *)
-		PORT_ArenaZAlloc(arena, sizeof(SECKEYPublicKey));
-
-	remote_pubk->arena = arena;
-	remote_pubk->keyType = dhKey;
-	remote_pubk->pkcs11Slot = NULL;
-	remote_pubk->pkcs11ID = CK_INVALID_HANDLE;
-
-	SECItem nss_g = {
-		.data = g.ptr,
-		.len = (unsigned int)g.len,
-		.type = siBuffer
-	};
-
-	status = SECITEM_CopyItem(remote_pubk->arena, &remote_pubk->u.dh.prime,
-				  &local_pubk->u.dh.prime);
-	passert(status == SECSuccess);
-
-	status = SECITEM_CopyItem(remote_pubk->arena, &remote_pubk->u.dh.base,
-				  &local_pubk->u.dh.base);
-	passert(status == SECSuccess);
-
-	status = SECITEM_CopyItem(remote_pubk->arena,
-				  &remote_pubk->u.dh.publicValue, &nss_g);
-	passert(status == SECSuccess);
-
-	PK11SymKey *dhshared = PK11_PubDerive(privk, remote_pubk, PR_FALSE, NULL, NULL,
-				  CKM_DH_PKCS_DERIVE,
-				  CKM_CONCATENATE_DATA_AND_BASE,
-				  CKA_DERIVE, group->bytes,
-				  lsw_return_nss_password_file_info());
-
-	if (dhshared != NULL) {
-		unsigned int shortfall = group->bytes - PK11_GetKeyLength(dhshared);
-
-		if (shortfall > 0) {
-			/*
-			 * We've got to pad the result with [shortfall] 0x00 bytes.
-			 * The chance of shortfall being n should be 1 in 256^n.
-			 * So really zauto ought to be big enough for the zeros.
-			 * If it isn't, we allocate space on the heap
-			 * (this will likely never be executed).
-			 */
-			DBG(DBG_CRYPT,
-				DBG_log("restoring %u DHshared leading zeros", shortfall));
-			unsigned char zauto[10];
-			unsigned char *z =
-				shortfall <= sizeof(zauto) ?
-					zauto : alloc_bytes(shortfall, "DH shortfall");
-			memset(z, 0x00, shortfall);
-			CK_KEY_DERIVATION_STRING_DATA string_params = {
-				.pData = z,
-				.ulLen = shortfall
-			};
-			SECItem params = {
-				.data = (unsigned char *)&string_params,
-				.len = sizeof(string_params)
-			};
-			PK11SymKey *newdhshared =
-				PK11_Derive(dhshared,
-					    CKM_CONCATENATE_DATA_AND_BASE,
-					    &params,
-					    CKM_CONCATENATE_DATA_AND_BASE,
-					    CKA_DERIVE, 0);
-			passert(newdhshared != NULL);
-			if (z != zauto)
-				pfree(z);
-			free_any_symkey("dhshared", &dhshared);
-			dhshared = newdhshared;
-		}
+	PK11SymKey *dhshared =
+		secret->group->dh_ops->calc_shared(secret->group,
+						   secret->privk,
+						   secret->pubk,
+						   remote_ke.ptr, remote_ke.len);
+	/*
+	 * The IKEv2 documentation, even for ECP, refers to "g^ir".
+	 */
+	LSWDBGP(DBG_CRYPT, buf) {
+		lswlog_dh_secret(buf, secret);
+		lswlogf(buf, "computed shared DH secret key@%p",
+			dhshared);
 	}
-
-	*story = enum_name(&oakley_group_names, group->group);
-
-	SECKEY_DestroyPublicKey(remote_pubk);
+	DBG(DBG_CRYPT, DBG_symkey("dh-shared ", "g^ir", dhshared));
 	return dhshared;
 }
 
-/* NOTE: if NSS refuses to calculate DH, skr->shared == NULL */
-/* MUST BE THREAD-SAFE */
-void calc_dh(struct pluto_crypto_req *r)
+/*
+ * If needed, these functions can be tweaked to; instead of moving use
+ * a copy and/or a reference count.
+ */
+
+void transfer_dh_secret_to_state(const char *helper, struct dh_secret **secret,
+				 struct state *st)
 {
-	/* copy the request, since the reply will re-use the memory of the r->pcr_d.dhq */
-	struct pcr_skeyid_q dhq;
-	memcpy(&dhq, &r->pcr_d.dhq, sizeof(r->pcr_d.dhq));
+	LSWDBGP(DBG_CRYPT, buf) {
+		lswlog_dh_secret(buf, *secret);
+		lswlogf(buf, "transferring ownership from helper %s to state #%lu",
+			helper, st->st_serialno);
+	}
+	pexpect(st->st_dh_secret == NULL);
+	st->st_dh_secret = *secret;
+	*secret = NULL;
+}
 
-	/* clear out the reply */
-	struct pcr_skeyid_r *skr = &r->pcr_d.dhr;
-	zero(skr);	/* ??? pointer fields might not be NULLed */
-	INIT_WIRE_ARENA(*skr);
+void transfer_dh_secret_to_helper(struct state *st,
+				  const char *helper, struct dh_secret **secret)
+{
+	LSWDBGP(DBG_CRYPT, buf) {
+		lswlog_dh_secret(buf, st->st_dh_secret);
+		lswlogf(buf, "transferring ownership from state #%lu to helper %s",
+			st->st_serialno, helper);
+	}
+	pexpect(*secret == NULL);
+	*secret = st->st_dh_secret;
+	st->st_dh_secret = NULL;
+}
 
-	const struct oakley_group_desc *group = lookup_group(dhq.oakley_group);
-	passert(group != NULL);
-
-	SECKEYPrivateKey *ltsecret = dhq.secret;
-	SECKEYPublicKey *pubk = dhq.pubk;
-
-	/* now calculate the (g^x)(g^y) */
-
-	chunk_t g;
-
-	setchunk_from_wire(g, &dhq, dhq.role == ORIGINAL_RESPONDER ? &dhq.gi : &dhq.gr);
-
-	DBG(DBG_CRYPT, DBG_dump_chunk("peer's g: ", g));
-
-	const char *story;	/* we ignore the value */
-
-	skr->shared = calc_dh_shared(g, ltsecret, group, pubk, &story);
+void free_dh_secret(struct dh_secret **secret)
+{
+	pexpect(*secret != NULL);
+	if (*secret != NULL) {
+		LSWDBGP(DBG_CRYPT, buf) {
+			lswlog_dh_secret(buf, *secret);
+			lswlogs(buf, "destroyed");
+		}
+		SECKEY_DestroyPublicKey((*secret)->pubk);
+		SECKEY_DestroyPrivateKey((*secret)->privk);
+		pfree(*secret);
+		*secret = NULL;
+	}
 }

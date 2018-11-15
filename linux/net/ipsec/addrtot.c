@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -73,14 +73,14 @@ int format;                     /* character */
 char *dst;                      /* need not be valid if dstlen is 0 */
 size_t dstlen;
 {
-	unsigned char *b;
+	const unsigned char *b;
 	size_t n;
 	char buf[1 + ADDRTOT_BUF + 1];      /* :address: */
 	char *p;
 	int t = addrtypeof(src);
 #       define  TF(t, f)        (((t) << 8) | (f))
 
-	n = addrbytesptr(src, &b);
+	n = addrbytesptr_read(src, &b);
 	if (n == 0) {
 		dst[0] = '\0';
 		strncat(dst, "<invalid>", dstlen - 1); /* we hope possible truncation does not cause problems */
@@ -180,7 +180,7 @@ size_t dstlen;
 	if (dstlen > 0) {
 		if (dstlen < n)
 			p[dstlen - 1] = '\0';
-		strcpy(dst, p);
+		strcpy(dst, p);	/* clang 6.0.0 mistakenly thinks p is undefined */
 	}
 	return n;
 }
@@ -349,20 +349,6 @@ char **dstp;                    /* where to put result pointer */
 	strcpy(p, "IP6.ARPA.");
 	*dstp = buf;
 	return strlen(buf) + 1;
-}
-
-/*
- * simplified interface to addrtot()
- *
- * Caller should allocate a buffer to hold the result as long
- * as the resulting string is needed.  Usually just long enough
- * to output.
- */
-
-const char *ipstr(const ip_address *src, ipstr_buf *b)
-{
-	addrtot(src, 0, b->buf, sizeof(b->buf));
-	return b->buf;
 }
 
 /*

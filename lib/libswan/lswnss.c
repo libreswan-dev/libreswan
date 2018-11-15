@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,12 +17,14 @@
 #include <nspr.h>
 #include <nss.h>
 #include <pk11pub.h>
+#include <secmod.h>
 #include <keyhi.h>
 
 #include "lswconf.h"
 #include "lswnss.h"
 #include "lswalloc.h"
 #include "lswlog.h"
+#include "lswfips.h"
 
 static unsigned flags;
 
@@ -41,43 +43,62 @@ bool lsw_nss_setup(const char *configdir, unsigned setup_flags,
 	PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 1);
 
 	libreswan_log("Initializing NSS");
-	if (configdir) {
+	if (configdir != NULL) {
 		const char sql[] = "sql:";
-		char *nssdb;
+		char *nssdir;
 		if (strncmp(sql, configdir, strlen(sql)) == 0) {
-			nssdb = strdup(configdir);
+			nssdir = strdup(configdir);
 		} else {
-			nssdb = alloc_bytes(strlen(configdir) + strlen(sql) + 1, "nssdb");
-			strcpy(nssdb, sql);
-			strcat(nssdb, configdir);
+			nssdir = alloc_bytes(strlen(configdir) + strlen(sql) + 1, "(ignore) nssdir");
+			strcpy(nssdir, sql);
+			strcat(nssdir, configdir);
 		}
-		libreswan_log("Opening NSS database \"%s\" %s", nssdb,
+		libreswan_log("Opening NSS database \"%s\" %s", nssdir,
 			      (flags & LSW_NSS_READONLY) ? "read-only" : "read-write");
-		SECStatus rv = NSS_Initialize(nssdb, "", "", SECMOD_DB,
+		SECStatus rv = NSS_Initialize(nssdir, "", "", SECMOD_DB,
 					      (flags & LSW_NSS_READONLY) ? NSS_INIT_READONLY : 0);
 		if (rv != SECSuccess) {
 			snprintf(err, sizeof(lsw_nss_buf_t),
 				 "Initialization of NSS with %s database \"%s\" failed (%d)",
 				 (flags & LSW_NSS_READONLY) ? "read-only" : "read-write",
-				 nssdb, PR_GetError());
-			pfree(nssdb);
+				 nssdir, PR_GetError());
+			pfree(nssdir);
 			return FALSE;
 		}
 	} else {
 		NSS_NoDB_Init(".");
+		if (libreswan_fipsmode() && !PK11_IsFIPS()) {
+			SECMODModule *internal = SECMOD_GetInternalModule();
+			if (internal == NULL) {
+				snprintf(err, sizeof(lsw_nss_buf_t),
+					 "SECMOD_GetInternalModule() failed");
+				return false;
+			}
+			if (SECMOD_DeleteInternalModule(internal->commonName) != SECSuccess) {
+				snprintf(err, sizeof(lsw_nss_buf_t),
+					 "SECMOD_DeleteInternalModule(%s) failed",
+					 internal->commonName);
+				return false;
+			}
+			if (!PK11_IsFIPS()) {
+				snprintf(err, sizeof(lsw_nss_buf_t),
+					 "NSS FIPS mode toggle failed");
+				return false;
+			}
+		}
 	}
 
-	if (PK11_IsFIPS() && get_password == NULL) {
+	if (PK11_IsFIPS() && configdir != NULL && get_password == NULL) {
 		snprintf(err, sizeof(lsw_nss_buf_t),
-			 "on FIPS mode a password is required");
+			 "in FIPS mode a password is required");
 		return FALSE;
 	}
 
-	if (get_password) {
+	if (get_password != NULL) {
 		PK11_SetPasswordFunc(get_password);
 	}
 
-	if (!(flags & LSW_NSS_SKIP_AUTH)) {
+	if (configdir != NULL) {
 		PK11SlotInfo *slot = lsw_nss_get_authenticated_slot(err);
 		if (slot == NULL) {
 			return FALSE;
@@ -91,6 +112,7 @@ bool lsw_nss_setup(const char *configdir, unsigned setup_flags,
 void lsw_nss_shutdown(void)
 {
 	NSS_Shutdown();
+	/* this flag is never set anywhere */
 	if (!(flags & LSW_NSS_SKIP_PR_CLEANUP)) {
 		PR_Cleanup();
 	}
@@ -152,7 +174,7 @@ struct private_key_stuff *lsw_nss_foreach_private_key_stuff(secret_eval func,
 
 	SECKEYPrivateKeyListNode *node;
 	for (node = PRIVKEY_LIST_HEAD(list);
-             !PRIVKEY_LIST_END(node, list);
+	     !PRIVKEY_LIST_END(node, list);
 	     node = PRIVKEY_LIST_NEXT(node)) {
 
 		if (SECKEY_GetPrivateKeyType(node->key) != rsaKey) {
@@ -161,7 +183,7 @@ struct private_key_stuff *lsw_nss_foreach_private_key_stuff(secret_eval func,
 		}
 
 		struct private_key_stuff pks = {
-			.kind = PPK_RSA,
+			.kind = PKK_RSA,
 			.on_heap = TRUE,
 		};
 

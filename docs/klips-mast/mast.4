@@ -64,7 +64,7 @@ The mast device provides a way to anchor routing daemon to virtual topologies. I
 There are three ways that a mast can be used. They correspond to how additional information (i.e. policy) is attached to the packets that are directed toward the device. mast devices are bi\-directional devices, but the flow of the packets that emerge do so in a uniform manner.
 
 .PP
-The first way is called the PPP method. A mast is considered to be portal to to which packets that need a predefined kind of encapsulation may be sent. The mast acts as a point to point device \- a virtual leased line \- sending all packets into the an underlying tunnel mechanism, having attached a default security policy to each packet. (As is described under "SECURITY POLICY", the nfmark is used). A mast device used in this way should be indistinguishable from a SLIP interface \- it has no layer two protocol. The layer two link status of the mast device may reflect the state of the dead peer detection status for the remote end point, if this feature has been enabled.
+The first way is called the PPP method. A mast is considered to be portal to which packets that need a predefined kind of encapsulation may be sent. The mast acts as a point to point device \- a virtual leased line \- sending all packets into the an underlying tunnel mechanism, having attached a default security policy to each packet. (As is described under "SECURITY POLICY", the nfmark is used). A mast device used in this way should be indistinguishable from a SLIP interface \- it has no layer two protocol. The layer two link status of the mast device may reflect the state of the dead peer detection status for the remote end point, if this feature has been enabled.
 
 .PP
 The second way that a mast device may be used is as an entry into a non\-broadcast, multiple access encapsulation media. The is the NFMARK method. The choice of a particular tunnel is indicated by setting bits in the control structure (the skb). This is described under "SECURITY POLICY".
@@ -76,7 +76,7 @@ The third way that a mast device may be used is with a virtual link layer. This 
 Packets that are sent upwards (in the direction of decapsulation) from the mast device will be marked by the tunnel on which the packet was received. The choice of which mast device to emerge from is also defined by the tunnel decapsulation mechanism. Typically, a unique device will be created per major policy category. This is done to simplify the firewall rules.
 
 .PP
-The PPP method is most appropriate for use on the client side of a road warrior configuration, or when there is a sufficiently small number of VPN tunnels that it is practical (or desireable) for each tunnel to have its own device associated with it. The simplification of firewall rules for output is the primary benefit of this mode.
+The PPP method is most appropriate for use on the client side of a road warrior configuration, or when there is a sufficiently small number of VPN tunnels that it is practical (or desirable) for each tunnel to have its own device associated with it. The simplification of firewall rules for output is the primary benefit of this mode.
 
 .PP
 The NFMARK mechanism is used by more traditional VPN topologies, and by Opportunistic Encryption. These two categories of use mandate a different output device per major policy. Both would use specific setting of policy bits (skb\->nfmark) for selection of outgoing policy.

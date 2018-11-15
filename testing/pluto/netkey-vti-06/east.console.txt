@@ -1,0 +1,24 @@
+/testing/guestbin/swan-prep
+east #
+ ipsec start
+Redirecting to: systemctl start ipsec.service
+east #
+ /testing/pluto/bin/wait-until-pluto-started
+east #
+ ipsec auto --add road-east-vti
+002 added connection description "road-east-vti"
+east #
+ echo "initdone"
+initdone
+east #
+ ipsec whack --trafficstatus
+006 #2: "road-east-vti"[1] 192.1.3.209, type=ESP, add_time=1234567890, inBytes=336, outBytes=336, id='@road'
+east #
+ grep -v -P "\t0$" /proc/net/xfrm_stat
+XfrmInTmplMismatch      	4
+east #
+east #
+ ../bin/check-for-core.sh
+east #
+ if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
+

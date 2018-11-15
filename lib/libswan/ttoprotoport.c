@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,9 +23,9 @@
 err_t ttoprotoport(src, src_len, proto, port, has_port_wildcard)
 char *src;	/* input string */
 size_t src_len;	/* length of input string, use strlen() if 0 */
-u_int8_t *proto;	/* extracted protocol number */
-u_int16_t *port;	/* extracted port number if it exists */
-int *has_port_wildcard;	/* set if port is %any */
+uint8_t *proto;	/* extracted protocol number */
+uint16_t *port;	/* extracted port number if it exists */
+bool *has_port_wildcard;	/* set if port is %any */
 {
 	char *end, *service_name;
 	char proto_name[16];
@@ -33,7 +33,7 @@ int *has_port_wildcard;	/* set if port is %any */
 	long int l;
 	struct protoent *protocol;
 	struct servent *service;
-	int wildcard;
+	bool wildcard;
 
 	/* get the length of the string */
 	if (!src_len)
@@ -66,7 +66,7 @@ int *has_port_wildcard;	/* set if port is %any */
 		if (l < 0 || l > 0xff)
 			return "<protocol> must be between 0 and 255";
 
-		*proto = (u_int8_t)l;
+		*proto = (uint8_t)l;
 	}
 
 	/* is there a port wildcard? */
@@ -97,7 +97,7 @@ int *has_port_wildcard;	/* set if port is %any */
 		else if (l < 0 || l > 0xffff)
 			return "<port> must be between 0 and 65535";
 
-		*port = (u_int16_t)l;
+		*port = (uint16_t)l;
 	}
 	return NULL;
 }
@@ -116,9 +116,9 @@ int main(int argc, char *argv[])
 {
 	char *pgm = argv[0];
 	const char *oops;
-	u_int8_t proto;
-	u_int16_t port;
-	int has_port_wildcard;
+	uint8_t proto;
+	uint16_t port;
+	bool has_port_wildcard;
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s {0x<hex>|0s<base64>|-r}\n", pgm);
@@ -163,22 +163,19 @@ char *pgm;
 	int status = 0;
 
 	for (r = atodatatab; r->ascii != NULL; r++) {
-		u_int8_t proto;
-		u_int16_t port;
-		int has_port_wildcard;
+		uint8_t proto;
+		uint16_t port;
+		bool has_port_wildcard;
 		err_t err = ttoprotoport(r->ascii, strlen(r->ascii),
 				&proto, &port, &has_port_wildcard);
 
 		if (r->wild == -1) {
-			if (err != NULL) {
-				/* okay, error expected */
-				continue;
-			} else {
+			if (err == NULL) {
 				printf("%s expected error, got none.\n",
 					r->ascii);
 				status = 1;
-				continue;
 			}
+			continue;
 		}
 
 		if (err != NULL) {
