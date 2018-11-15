@@ -1,4 +1,6 @@
-# use the connalias
+/testing/pluto/bin/wait-until-pluto-started
+
 ipsec auto --up  franklin
-ipsec whack --trafficstatus
+
+ipsec look
 echo done

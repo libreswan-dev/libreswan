@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,11 +17,10 @@ import os
 import logging
 import pexpect
 import time
-
 from fab import virsh
 from fab import shell
 from fab import timing
-from fab import logutil
+
 
 MOUNTS = {}
 
@@ -29,9 +28,8 @@ def mounts(domain):
     """Return a table of 9p mounts for the given domain"""
     # maintain a local cache
     if domain in MOUNTS:
-        mounts = MOUNTS[domain]
-        domain.logger.debug("using mounts from cache: %s", mounts)
-        return
+        domain.logger.debug("using mounts from cache")
+        return MOUNTS[domain]
     mounts = {}
     MOUNTS[domain] = mounts
     status, output = domain.dumpxml()
@@ -58,7 +56,6 @@ def mounts(domain):
             domain.logger.debug("filesystem target '%s' source '%s'", target, source)
             mounts[target] = source
             continue
-    domain.logger.debug("extracted mounts: %s", mounts)
     return mounts
 
 
@@ -70,7 +67,7 @@ def mount_point(domain, console, device):
         FSTABS[domain] = {}
     fstab = FSTABS[domain]
     if device in fstab:
-        mount = fstab[device]
+        mount= fstab[device]
         domain.logger.debug("using fstab entry for %s (%s) from cache", device, mount)
         return mount;
     console.sendline("awk '$1==\"" + device + "\" { print $2 }' < /etc/fstab")
@@ -81,57 +78,50 @@ def mount_point(domain, console, device):
     return mount
 
 
-# Map the local PATH onto a domain DIRECTORY
-def path(domain, console, path):
-    path = os.path.realpath(path)
-    # Because .items() returns an unordered list (it can change across
-    # python invocations or even within python as the dictionary
-    # evolves) it first needs to be sorted.  Use the DIRECTORY sorted
-    # in reverse so that /source/testing comes before /source - and
-    # the longer path is prefered.
-    device_directory = sorted(mounts(domain).items(),
-                              key=lambda item: item[1],
-                              reverse=True)
-    domain.logger.debug("ordered device/directory %s", device_directory);
-    for device, directory in device_directory:
-        if os.path.commonprefix([directory, path]) == directory:
-            # found the local directory path that is mounted on the
-            # machine, now map that onto a remote path
-            root = mount_point(domain, console, device)
-            return root + path[len(directory):]
-
-    raise AssertionError("the host path '%s' is not mounted on the guest %s" % (path, domain))
+def directory(domain, console, directory, default=None):
+    directory = os.path.realpath(directory)
+    for target, source in mounts(domain).items():
+        if os.path.commonprefix([source, directory]) == source:
+            # found a suitable mount point, now find were it is
+            # mounted on the remote machine.
+            root = mount_point(domain, console, target)
+            return root + directory[len(source):]
+    return default
 
 
-# Domain timeouts
+# Bring a booting machine up to point where key services have started.
+#
+# The service that handles "virsh shutdown" needs to be running as
+# otherwise a quick shutdown after a boot will go no where.  On the
+# other hand, there is no point in having a painfully long wait for
+# all services to start and the login: prompt to appear.
+#
+# Note: It must not match anything from GRUB.  Feeding control-c and
+# return (from a login attempt) to GRUB can result in weird and
+# puzzling behaviour such as booting the wrong kernel.
 
+STARTUP_TIMEOUT = 60
 SHUTDOWN_TIMEOUT = 20
-START_TIMEOUT = 10
-LOGIN_PROMPT_TIMEOUT = 120
 
-def _wait_for_login_prompt(domain, console, timeout, also_expect=[]):
-    # If match is non-empty, append it, so the first index is 1
-    timer = timing.Lapsed()
-    # Create a new list, otherwise the default [] ends up containing
-    # lots of login prompts ...
-    matches = ["login: "] + also_expect
-    domain.logger.debug("waiting %d seconds for %s",
-                        timeout, " or ".join(ascii(match) for match in matches))
-    match = console.expect(matches, timeout=timeout)
-    # always report a prompt match, let caller decide if other cases
-    # should be verbose.
-    domain.logger.log(match == 0 and logutil.INFO or logutil.DEBUG,
-                      "%s matched after %s", ascii(matches[match]), timer)
-    return match
+def _startup(domain, console, timeout=STARTUP_TIMEOUT):
+    expected = "Started Login Service"
+    # XXX: While searchwindowsize=len(expected) should technically be
+    # sufficient to speed up matching, it isn't.  In fact, when more
+    # than searchwindowsize is read as a single block, pexpect only
+    # searchs the last searchwindowsize characters missing anything
+    # before it.
+    #
+    # See: https://github.com/pexpect/pexpect/issues/203
+    domain.logger.info("waiting %d seconds for domain to start (%s)", timeout, expected)
+    lapsed_time = timing.Lapsed()
+    console.expect_exact(expected, timeout=timeout)
+    domain.logger.info("domain started after %s", lapsed_time)
 
 
 # Assuming the machine is booted, try to log-in.
 
-LOGIN_TIMEOUT = 10
-PASSWORD_TIMEOUT = 5
-SHELL_TIMEOUT = 5
-
-def _login(domain, console, username, password, login_timeout, password_timeout, shell_timeout):
+def _login(domain, console, username, password,
+           login_timeout, password_timeout, shell_timeout):
 
     lapsed_time = timing.Lapsed()
 
@@ -142,8 +132,7 @@ def _login(domain, console, username, password, login_timeout, password_timeout,
     domain.logger.debug("sending control-c+carriage return, waiting %s seconds for login or shell prompt", login_timeout)
     console.sendintr()
     console.sendline("")
-    if _wait_for_login_prompt(domain, console, timeout=login_timeout,
-                              also_expect=[console.prompt]) == 1:
+    if console.expect(["login: ", console.prompt], timeout=login_timeout):
         # shell prompt
         domain.logger.info("We're in after %s!  Someone forgot to log out ...", lapsed_time)
         return
@@ -163,6 +152,10 @@ def _login(domain, console, username, password, login_timeout, password_timeout,
     domain.logger.info("We're in after %s!", lapsed_time)
 
 
+LOGIN_TIMEOUT = 120
+PASSWORD_TIMEOUT = 5
+SHELL_TIMEOUT = 5
+
 # The machine is assumed to be booted.
 
 def login(domain, console,
@@ -181,13 +174,10 @@ def login(domain, console,
     console.sync()
 
 
-# Get a domain running with an attatched console.  Should be really
-# quick.
-
-def _start(domain, timeout):
+def _start(domain, startup_timeout=STARTUP_TIMEOUT):
     domain.logger.info("starting domain")
     # Bring the machine up from scratch.
-    end_time = time.time() + timeout
+    end_time = time.time() + startup_timeout
     # Do not call this when the console is functional!
     console = domain.console()
     if console:
@@ -208,6 +198,48 @@ def _start(domain, timeout):
         first_attempt = False
     domain.logger.debug("got console")
     return console
+
+
+def start(domain, startup_timeout=STARTUP_TIMEOUT):
+    console = _start(domain, startup_timeout)
+    # Now wait for it to be usable
+    _startup(domain, console, timeout=(end_time - time.time()))
+    return console
+
+
+def reboot(domain, console=None,
+           shutdown_timeout=SHUTDOWN_TIMEOUT,
+           startup_timeout=STARTUP_TIMEOUT):
+    console = console or domain.console()
+    if not console:
+        domain.logger.error("domain is shutdown")
+        return None
+    domain.logger.info("waiting %d seconds for domain to reboot", shutdown_timeout)
+    lapsed_time = timing.Lapsed()
+    domain.reboot()
+
+    try:
+        console.expect("\[\s*[0-9]+\.[0-9]+]\s+reboot:", timeout=SHUTDOWN_TIMEOUT)
+        domain.logger.info("domain rebooted after %s", lapsed_time)
+    except pexpect.TIMEOUT:
+        domain.logger.error("domain failed to reboot after %s, resetting it", lapsed_time)
+        domain.reset()
+        # give the domain extra time to start
+        startup_timeout = startup_timeout * 4
+
+    try:
+        _startup(domain, console, timeout=startup_timeout)
+        return console
+    except pexpect.TIMEOUT:
+        domain.logger.error("domain failed to start after %s, power cycling it", lapsed_time)
+        # On F23 the domain sometimes becomes wedged in the PAUSED
+        # state.  When it does, give it a full reset.
+        if domain.state() == virsh.STATE.PAUSED:
+            domain.destroy()
+        else:
+            domain.shutdown()
+        console.expect(pexpect.EOF, timeout=shutdown_timeout)
+        return start(domain)
 
 
 # Use the console to detect the shutdown - if/when the domain stops it
@@ -231,77 +263,31 @@ def shutdown(domain, console=None, shutdown_timeout=SHUTDOWN_TIMEOUT):
     domain.logger.info("domain shutdown after %s", lapsed_time)
     return False
 
-def _reboot_to_login_prompt(domain, console):
 
-    # Drain any existing output.
-    console.drain()
+def boot_to_login_prompt(domain, console, timeout=(STARTUP_TIMEOUT+LOGIN_TIMEOUT)):
 
-    # The reboot pattern needs to match all the output up to the point
-    # where the machine is reset.  That way, the next pattern below
-    # can detect that the reset did something and the machine is
-    # probably rebooting.
-    timeouts = [SHUTDOWN_TIMEOUT, START_TIMEOUT, LOGIN_PROMPT_TIMEOUT]
-    timeout = 0
-    for t in timeouts:
-        timeout += t
-    domain.logger.info("waiting %s seconds for reboot and login prompt", timeout)
-    domain.reboot()
-    timer = timing.Lapsed()
-    for timeout in timeouts:
-        # pexpect's pattern matcher is buggy and, if there is too much
-        # output, it may not match "reboot".  virsh's behaviour is
-        # also buggy, see further down.
-        match = _wait_for_login_prompt(domain, console, timeout=timeout,
-                                       also_expect=["reboot: Power down\r\n",
-                                                    pexpect.EOF,
-                                                    pexpect.TIMEOUT])
-        if match == 0:
+    for attempt in range(2):
+
+        if console:
+            domain.reboot()
+        else:
+            console = _start(domain)
+
+        lapsed_time = timing.Lapsed()
+        domain.logger.info("waiting %s seconds for login prompt", timeout)
+
+        if console.expect_exact([pexpect.TIMEOUT, "login: "], timeout=timeout):
+            domain.logger.info("login prompt appeared after %s", lapsed_time)
             return console
-        elif match == 1:
-            domain.logger.info("domain rebooted after %s", timer)
-        elif match == 2:
-            # On F26, in response to the reset(?), virsh will
-            # spontaneously disconnect.
-            domain.logger.error("domain disconnected spontaneously after %s", timer)
-            break
-        elif match == 3 and console.child.buffer == "":
-            # On F23, F24, F25, instead of resetting, the domain will
-            # hang.  The symptoms are a .TIMEOUT and an empty buffer
-            # (HACK!).
-            domain.logger.error("domain appears stuck, no output received after waiting %d seconds",
-                                timeout)
-            break
 
-    # Things aren't going well.  Per above Fedora can screw up or the
-    # domain is just really slow.  Try destroying the domain and then
-    # cold booting it.
+        domain.logger.error("domain failed to start after %s, power cycling it", lapsed_time)
+        # On F23 the domain sometimes becomes wedged in the PAUSED
+        # state.  When it does, give it a full reset.
+        if domain.state() == virsh.STATE.PAUSED:
+            domain.destroy()
+        else:
+            domain.shutdown()
+            console.expect(pexpect.EOF, timeout=SHUTDOWN_TIMEOUT)
+        console = None
 
-    destroy = True
-    if domain.state() == virsh.STATE.PAUSED:
-        destroy = False
-        domain.logger.error("domain suspended, trying resume")
-        status, output = domain.resume()
-        if status:
-            domain.logger.error("domain resume failed: %s", output)
-            destroy = True
-    if destroy:
-        domain.logger.error("domain hung, trying to pull the power cord")
-        domain.destroy()
-        console.expect_exact(pexpect.EOF, timeout=SHUTDOWN_TIMEOUT)
-        console = _start(domain, timeout=START_TIMEOUT)
-
-    # Now wait for login prompt.  If this second attempt fails then
-    # either a .TIMEOUT or a .EOF exception will be thrown and the
-    # test will be aborted (marked as unresolved).
-    _wait_for_login_prompt(domain, console, timeout=LOGIN_PROMPT_TIMEOUT)
-    return console
-
-
-def boot_to_login_prompt(domain, console):
-
-    if console:
-        return _reboot_to_login_prompt(domain, console)
-    else:
-        console = _start(domain, timeout=START_TIMEOUT)
-        _wait_for_login_prompt(domain, console, timeout=LOGIN_PROMPT_TIMEOUT)
-        return console
+    raise pexpect.TIMEOUT("Domain %s did not reach login prompt" % domain)

@@ -5,9 +5,9 @@
 #########################################################################
 
 For detailed developer information about NSS, see
-https://www.mozilla.org/projects/security/pki/nss/
+http://www.mozilla.org/projects/security/pki/nss/
 
-The NSS crypto library is a user space library. It is only used with the
+The NSS crypto library is user space library. It is only used with the
 libreswan userspace IKE daemon pluto for cryptographic operations. NSS
 does not perform IPsec crypto operations inside the kernel (KLIPS
 nor NETKEY)
@@ -41,16 +41,16 @@ currently being FIPS certified for RHEL7.
 - certutil: Look and modify the NSS db. "ipsec initnss" and "ipsec look"
   use certutil under the hood.
 
-https://www.mozilla.org/projects/security/pki/nss/tools/certutil.html
+http://www.mozilla.org/projects/security/pki/nss/tools/certutil.html
 
 - pk12util: import and export certificates and keys from and to the NSS db.
   The "ipsec import" command is a simple wrapper around this utility.
 
-https://www.mozilla.org/projects/security/pki/nss/tools/pk12util.html
+http://www.mozilla.org/projects/security/pki/nss/tools/pk12util.html
 
 - modutil: Put NSS into FIPS mode
 
-https://www.mozilla.org/projects/security/pki/nss/tools/modutil.html
+http://www.mozilla.org/projects/security/pki/nss/tools/modutil.html
 
 #########################################################################
 # Creating the NSS db for use with libreswan's pluto IKE daemon
@@ -62,9 +62,7 @@ using:
 
 	ipsec initnss
 
-By default the NSS db is created in /etc/ipsec.d/ on RHEL/Fedora/CentOS
-but in /var/lib/ipsec/nss/ on Debian/Ubuntu. The remainder of this file
-uses /etc/ipsec.d/ in the examples.
+By default the NSS db is created in /etc/ipsec.d/
 
 When creating a database, you are prompted for a password. The default
 libreswan package install for RHEL/Fedora/CentOS uses an empty password.
@@ -110,15 +108,20 @@ Note: do not enter any spaces before or after the token name or password.
 
 The "ipsec newhostkey" and "ipsec rsasigkey" utilities are used for
 creating raw RSA keys. If a non-default NSS directory is used, this can
-be specified using the --nssdir option.
+be specified using the -d option.
 
-	ipsec newhostkey --nssdir /tmp/ipsec.d [--password password]
+	ipsec newhostkey --configdir /etc/ipsec.d [--password password] \
+		--output /etc/ipsec.secrets
 
 The password is only required if the NSS database is protected with a
-non-empty password.
+non-empty password.  All "private" compontents of the raw RSA key in
+/etc/ipsec.secrets such as the exponents and primes are filled in with
+the CKA ID, which serves as an identifier for NSS to look up the proper
+information in the NSS db during the IKE negotiation.
 
-Public key information is available via the "ipsec showhostkey" command
-can be used to generate left/rightrsasigkey= entries for /etc/ipsec.conf.
+Public key information is directly available in /etc/ipsec.secrets and the
+"ipsec showhostkey" command can be used to generate left/rightrsasigkey=
+entries for /etc/ipsec.conf.
 
 #########################################################################
 # Using certificates with NSS
@@ -133,14 +136,14 @@ https://github.com/libreswan/libreswan/tree/master/testing/x509
 
 Below, we will be using the nss tools to generate certificates
 
-* To create a certificate authority (CA certificate):
+* To create a certificate authority (CA certficate):
 
-	certutil -S -k rsa -n "ExampleCA" -s "CN=Example CA Inc" -v 12 \
+	certutil -S -k rsa -n "ExampleCA" -s "CN=Example CA Inc" -w 12 \
 		-t "CT,," -x -d sql:/etc/ipsec.d
 
-It creates a certificate with RSA keys (-k rsa) with the nickname
+It creates a certificate with RSA keys (-k rsa) with the nick name
 "ExampleCA", and with common name "Example CA Inc". The option
-"-v" specifies the certificates validy period. "-t" specifies the attributes
+"-w" specifies the certificates validy period. "-t" specifies the attributes
 of the certificate. "C" is required for creating a CA certificate. "-x" mean
 self signed. "-d" specifies the path of the database directory. The directory
 path should be prefixed with 'sql:' in order to use the SQLite format.
@@ -151,9 +154,9 @@ certificate can be obtained from anywhere in the world.
 * To create a user certificate signed by the above CA
 
 	certutil -S -k rsa -c "ExampleCA" -n "user1" -s "CN=User Common Name" \
-		-v 12 -t "u,u,u" -d sql:/etc/ipsec.d
+		-w 12 -t "u,u,u" -d sql:/etc/ipsec.d
 
-It creates a user cert with nickname "user1" with attributes
+It creates a user cert with nick name "user1" with attributes
 "u,u,u" signed by the CA cert "ExampleCA".
 
 NOTE: You must provide a nick name when creating a user certificate,
@@ -179,7 +182,7 @@ This is specified using:
 
  : RSA nickname
 
-NOTE: In openswan and freeswan it was required to specify a file name or
+NOTE: In openswan and freeswan  it was required to specify a file name or
 password. With libreswan, this is not required.
 NOTE: openswan and freeswan stored private keys in /etc/ipsec.d/private/
 This directory does not exist for libreswan.
@@ -207,8 +210,10 @@ Now you can import the file into the NSS db:
 
 	ipsec import certkey.p12
 
+NOTE: the ipsec command uses "pk12util -i certkey.p12 -d /etc/ipsec.d"
+
 If you did not pick a name using the -name option, you can use
-certutil -L -d sql:/etc/ipsec.d to figure out the name NSS picked during
+certutil -L -d /etc/ipsec.d to figure out the name NSS picked durnig
 the import.
 
 Add following to /etc/ipsec.secrets file:
@@ -229,7 +234,7 @@ Paul: add "ipsec export" ?
 
 To export the CA certificate:
 
-	pk12util -o cacert1.p12 -n cacert1 -d sql:/etc/ipsec.d
+	NSS_DEFAULT_DB_TYPE="sql:" pk12util -o cacert1.p12 -n cacert1 -d /etc/ipsec.d
 
 Copy the file "cacert1.p12" to the new machine and import it using:
 

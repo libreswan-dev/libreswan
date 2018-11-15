@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -35,7 +35,7 @@ struct db_attr {
 						 */
 		enum ikev1_ipsec_attr ipsec;
 	} type;
-	uint16_t val;
+	u_int16_t val;
 };
 
 /*
@@ -67,7 +67,7 @@ struct db_attr {
 
 /* transform: an array of attributes */
 struct db_trans {
-	uint16_t transid;	/* Transform-Id */
+	u_int16_t transid;	/* Transform-Id */
 	struct db_attr *attrs;	/* [attr_cnt] attributes */
 	unsigned int attr_cnt;	/* number of attributes */
 };
@@ -77,7 +77,7 @@ struct db_trans {
  * Example: several different ESP transforms, any of which is OK.
  */
 struct db_prop {
-	uint8_t protoid;	/* Protocol-Id */
+	u_int8_t protoid;	/* Protocol-Id */
 	struct db_trans *trans;	/* [trans_cnt] transforms (disjunction) */
 	unsigned int trans_cnt;	/* number of transforms */
 	/* SPI size and value isn't part of DB */
@@ -109,10 +109,10 @@ struct db_sa {
 /*
  * IKE policies.
  *
- * am == aggressive mode
+ * am == agressive mode
  */
-extern struct db_sa *IKEv1_oakley_sadb(lset_t x, const struct connection *c);
-extern struct db_sa *IKEv1_oakley_am_sadb(lset_t x, const struct connection *c);
+extern struct db_sa *IKEv1_oakley_sadb(lset_t x, struct connection *c);
+extern struct db_sa *IKEv1_oakley_am_sadb(lset_t x, struct connection *c);
 
 /* The ipsec sadb is subscripted by a bitset with members
  * from POLICY_ENCRYPT, POLICY_AUTHENTICATE, POLICY_COMPRESS
@@ -136,27 +136,33 @@ extern struct db_sa ipsec_sadb[1 << 3];
 #define AD_PC(x) .props = (x), .prop_cnt = elemsof(x)
 
 extern bool ikev1_out_sa(pb_stream *outs,
-		   const struct db_sa *sadb,
+		   struct db_sa *sadb,
 		   struct state *st,
 		   bool oakley_mode,
 		   bool aggressive_mode,
 		   enum next_payload_types_ikev1 np);
+
+#if 0
+extern complaint_t accept_oakley_auth_method(struct state *st,  /* current state object */
+					     u_int32_t amethod, /* room for larger values */
+					     bool credcheck);   /* whether we can check credentials now */
+#endif
 
 extern lset_t preparse_isakmp_sa_body(pb_stream sa_pbs /* by value! */);
 
 extern notification_t parse_isakmp_sa_body(pb_stream *sa_pbs,           /* body of input SA Payload */
 					   const struct isakmp_sa *sa,  /* header of input SA Payload */
 					   pb_stream *r_sa_pbs,         /* if non-NULL, where to emit winning SA */
-					   bool selection,              /* if this SA is a selection, only one transform can appear */
+					   bool selection,              /* if this SA is a selection, only one tranform can appear */
 					   struct state *st);           /* current state object */
 
 /* initialize a state with the aggressive mode parameters */
-extern bool init_aggr_st_oakley(struct state *st, lset_t policy);
+extern int init_aggr_st_oakley(struct state *st, lset_t policy);
 
 extern notification_t parse_ipsec_sa_body(pb_stream *sa_pbs,            /* body of input SA Payload */
 					  const struct isakmp_sa *sa,   /* header of input SA Payload */
 					  pb_stream *r_sa_pbs,          /* if non-NULL, where to emit winning SA */
-					  bool selection,               /* if this SA is a selection, only one transform can appear */
+					  bool selection,               /* if this SA is a selection, only one tranform can appear */
 					  struct state *st);            /* current state object */
 
 extern void free_sa_attr(struct db_attr *attr);
@@ -167,16 +173,5 @@ extern struct db_sa *sa_merge_proposals(struct db_sa *a, struct db_sa *b);
 
 /* in spdb_print.c - normally never used in pluto */
 extern void sa_log(struct db_sa *f);
-
-struct alg_info_ike;
-struct alg_info_esp;
-
-extern struct db_sa *oakley_alg_makedb(struct alg_info_ike *ai,
-				       enum ikev1_auth_method auth_method,
-				       bool single_dh);
-
-extern struct db_sa *kernel_alg_makedb(lset_t policy,
-				       struct alg_info_esp *ei,
-				       bool logit);
 
 #endif /*  _SPDB_H_ */

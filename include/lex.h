@@ -4,7 +4,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -21,7 +21,7 @@ struct file_lex_position {
 	int lino;				/* line number in file */
 	char buffer[MAX_TOK_LEN + 1];		/* note: one extra char for our use (jamming '"') */
 	char *cur;				/* cursor */
-	char under;				/* except in shift(): character originally at *cur */
+	char under;				/* except in shift(): character orignally at *cur */
 	char *tok;
 	struct file_lex_position *previous;
 };

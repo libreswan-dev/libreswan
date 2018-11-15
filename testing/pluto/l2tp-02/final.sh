@@ -1,9 +1,9 @@
-../../pluto/bin/ipsec-look.sh
+ipsec look
 : ==== cut ====
 ipsec auto --status
 cat /tmp/xl2tpd.log
 : ==== tuc ====
 grep 'Result using RFC 3947' /tmp/pluto.log
-../bin/check-for-core.sh
+if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

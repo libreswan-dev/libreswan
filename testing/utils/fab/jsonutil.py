@@ -5,30 +5,64 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
 # for more details.
 
+# Implement log-level inversion.
+#
+# Ref: https://docs.python.org/2/howto/logging.html#logging-flow
+#
+# By default, a parent (root) logger, regardless of its log-level,
+# will log all the records logged by a child.  For instance, if a
+# child logger is logging at DEBUG-level, then the parent will log
+# (display on the console) those DEBUG-level records even when it has
+# been configured to log only INFO-level records.  This is because the
+# default log-level ("Logger enabled for level of call?") check is
+# only applied once at record-creation.
+#
+# This code allows DEBUG-level logging to a file, while simultaneously
+# (the inversion) restricting console log records to just INFO-level
+# say.
+
+# Add '"%(name)s %(runtime)s: ' prefix to all messages.
+#
+# Ref: https://docs.python.org/3.6/howto/logging-cookbook.html#using-loggeradapters-to-impart-contextual-information
+#
+# It uses the msg edit hack as that seems simple and straight forward.
+# The timer used to generate "runtime" can also nest/stack times
+# making it easy to track sub-processes.
+
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
 class result:
-    directory = "directory"
     testname = "testname"
     expect = "expect"
     result = "result"
-    hosts = "hosts"
-    issues = "errors" # for historic reasons, "issues" are publicly called "errors"
-    script_time = "script_time"
-    boot_time = "boot_time"
-    hosts = "hosts"
-    # keep things going
     time = "time"
     runtime = "runtime"
+    host_results = "host_results"
 
+class table:
+    rundir = "runDir"
+    suffix = "suffix"
+    summary = "summary"
+    columns = "columns"
+    rows = "rows"
+
+class summary:
+    passed = "passed"
+    failed = "failed"
+    incomplete = "incomplete"
+    total = "Total"
+    # end-time: YYYY-MM-DD HH:MM see ftime/ptime.
+    date = "date"
+    runtime = "runtime"
+    directory = "directory"
 
 def load(io):
     try:
@@ -42,46 +76,14 @@ def loads(s):
     except ValueError:
         return None
 
-def default(obj):
-    if hasattr(obj, "json") and callable(getattr(obj, "json")):
-        return obj.json()
-    if hasattr(obj, "isoformat") and callable(getattr(obj, "isoformat")):
-        # date/time objects
-        if not obj.utcoffset():
-            # add local timezone to "naive" local time
-            # https://stackoverflow.com/questions/2720319/python-figure-out-local-timezone
-            tzinfo = datetime.now(timezone.utc).astimezone().tzinfo
-            obj = obj.replace(tzinfo=tzinfo)
-        # convert to UTC
-        obj = obj.astimezone(timezone.utc)
-        # strip the UTC offset
-        obj = obj.replace(tzinfo=None)
-        return obj.isoformat() + "Z"
-    elif hasattr(obj, "__str__") and callable(getattr(obj, "__str__")):
-        return str(obj)
-    else:
-        print("obj:", obj)
-        raise TypeError(obj)
-
 def dump(j, io):
-    json.dump(j, io, indent=2, default=default)
+    json.dump(j, io, indent=2)
 
 def dumps(s):
-    return json.dumps(s, default=default)
+    return json.dumps(s)
 
 def ftime(t):
-    """Format the time"""
     return t.strftime("%Y-%m-%d %H:%M")
 
 def ptime(s):
-    """Tries to parse what is assumed to be local time"""
-    # print(s)
-    for hms in ["%H:%M", "%H:%M:%S", "%H:%M:%S.%f"]:
-        for t in [" ", "T"]:
-            try:
-                t = datetime.strptime(s, "%Y-%m-%d" + t + hms)
-                # print(t)
-                return t
-            except:
-                None
-    return None
+    datetime.strptime(s, "%Y-%m-%d %H:%M")

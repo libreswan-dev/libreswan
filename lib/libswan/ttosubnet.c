@@ -6,18 +6,15 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Library General Public
  * License for more details.
  */
-
-#include <string.h>
-
-#include "ip_subnet.h"
-#include "libreswan.h"		/* for ttoulb() */
+#include "internal.h"
+#include "libreswan.h"
 
 #ifndef DEFAULTSUBNET
 #define DEFAULTSUBNET "%default"
@@ -81,7 +78,7 @@ ip_subnet *dst;
 
 	mask = slash + 1;
 	mlen = srclen - (mask - src);
-	oops = ttoaddr_num(src, slash - src, af, &addrtmp);
+	oops = ttoaddr(src, slash - src, af, &addrtmp);
 	if (oops != NULL)
 		return oops;
 
@@ -120,7 +117,7 @@ ip_subnet *dst;
 		/* ttoul succeeded, it's a bit-count mask */
 		i = bc;
 	} else if (af == AF_INET) {
-		oops = ttoaddr_num(mask, mlen, af, &masktmp);
+		oops = ttoaddr(mask, mlen, af, &masktmp);
 		if (oops != NULL)
 			return oops;
 
@@ -180,8 +177,8 @@ int main(int argc, char *argv[])
 		(void) addrtot(&s.addr, 0, buf2, sizeof(buf2));
 		fprintf(stderr, "%s/", buf2);
 		fprintf(stderr, "%d", s.maskbits);
-		fprintf(stderr, " failed: need %zd bytes, have only %zd\n",
-			n, sizeof(buf));
+		fprintf(stderr, " failed: need %ld bytes, have only %ld\n",
+			(long)n, (long)sizeof(buf));
 		exit(1);
 	}
 	printf("%s\n", buf);
@@ -302,8 +299,8 @@ void regress(void)
 			status = 1;
 			n = subnetporttot(&s, 0, buf, sizeof(buf));
 			if (n > sizeof(buf))
-				printf("`%s' subnettot failed:  need %zd\n",
-					r->input, n);
+				printf("`%s' subnettot failed:  need %ld\n",
+					r->input, (long)n);
 			else if (!streq(r->output, buf))
 				printf("`%s' gave `%s', expected `%s'\n",
 					r->input, buf, r->output);

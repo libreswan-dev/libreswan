@@ -1,3 +1,0 @@
-Tests: opportunistic
-Restrictions: needs-root, isolation-machine
-Depends: @, iputils-ping, wget, systemd, dnsutils

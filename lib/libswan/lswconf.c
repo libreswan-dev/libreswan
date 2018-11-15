@@ -10,7 +10,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -52,7 +52,7 @@ static bool lsw_conf_setdefault(void)
 	}
 
 	/* copy everything to the heap for consistency. */
-	global_oco.rootdir = clone_str("", "rootdir");
+	global_oco.rootdir = clone_str("","rootdir");
 
 	global_oco.confdir = clone_str(IPSEC_CONFDIR, "default conf ipsec_conf_dir");
 	global_oco.conffile = clone_str(IPSEC_CONF, "default conf conffile");
@@ -62,7 +62,7 @@ static bool lsw_conf_setdefault(void)
 
 	global_oco.confddir = clone_str(IPSEC_CONFDDIR, "default conf ipsecd_dir");
 
-	global_oco.nssdir = clone_str(IPSEC_NSSDIR, "default nssdir");
+	global_oco.nssdb = clone_str(IPSEC_NSSDIR, "default nssdb");
 
 	/* see also lsw_conf_calculate() below */
 	return TRUE;
@@ -118,7 +118,7 @@ void lsw_conf_free_oco(void)
 	pfreeany(global_oco.nsspassword_file);
 	pfreeany(global_oco.nsspassword);
 
-	pfreeany(global_oco.nssdir);
+	pfreeany(global_oco.nssdb);
 
 	messup(&global_oco);
 }
@@ -148,13 +148,23 @@ void lsw_conf_confddir(const char *confddir)
 	libreswan_log("adjusting ipsec.d to %s", global_oco.confddir);
 }
 
-void lsw_conf_nssdir(const char *nssdir)
+void lsw_conf_nssdb(const char *nssdb)
 {
 	lsw_conf_setdefault();
-	subst(&global_oco.nssdir, nssdir, "override nssdir");
+	subst(&global_oco.nssdb, nssdb, "override nssdir");
 	lsw_conf_calculate();
 
-	libreswan_log("adjusting nssdir to %s", global_oco.nssdir);
+	libreswan_log("adjusting nssdb to %s", global_oco.confddir);
+}
+
+void lsw_init_ipsecdir(const char *confddir)
+{
+	lsw_conf_setdefault();
+	subst(&global_oco.confddir, confddir, "override ipsec.d");
+	subst(&global_oco.nssdb, confddir, "override nssdir");
+	lsw_conf_calculate();
+
+	libreswan_log("adjusting ipsec.d and nssdb to %s", global_oco.confddir);
 }
 
 void lsw_conf_secretsfile(const char *secretsfile)
@@ -180,11 +190,11 @@ int libreswan_selinux(void)
 {
 	char selinux_flag[1];
 	int n;
-	FILE *fd = fopen("/sys/fs/selinux/enforce", "r");
+	FILE *fd = fopen("/sys/fs/selinux/enforce","r");
 
 	if (fd == NULL) {
 		/* try new location first, then old location */
-		fd = fopen("/selinux/enforce", "r");
+		fd = fopen("/selinux/enforce","r");
 		if (fd == NULL) {
 			DBG(DBG_CONTROL,
 				DBG_log("SElinux: disabled, could not open /sys/fs/selinux/enforce or /selinux/enforce");
@@ -203,4 +213,5 @@ int libreswan_selinux(void)
 		return 1;
 	else
 		return 0;
+
 }

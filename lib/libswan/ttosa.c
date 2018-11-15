@@ -6,15 +6,15 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Library General Public
  * License for more details.
  */
-
-#include "ip_said.h"
+#include "internal.h"
+#include "libreswan.h"
 
 static struct satype {
 	char *prefix;
@@ -134,7 +134,7 @@ ip_said *sa;
 	alen = srclen - (addr - src);
 	if (af == AF_UNSPEC)
 		af = (memchr(addr, ':', alen) != NULL) ? AF_INET6 : AF_INET;
-	oops = ttoaddr_num(addr, alen, af, &sa->dst);
+	oops = ttoaddr(addr, alen, af, &sa->dst);
 	if (oops != NULL)
 		return oops;
 
@@ -177,8 +177,8 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "%lx@", (long unsigned int)sa.spi);
 		(void) addrtot(&sa.dst, 0, buf2, sizeof(buf2));
 		fprintf(stderr, "%s", buf2);
-		fprintf(stderr, " failed: need %zd bytes, have only %zd\n",
-			n, sizeof(buf));
+		fprintf(stderr, " failed: need %ld bytes, have only %ld\n",
+			(long)n, (long)sizeof(buf));
 		exit(1);
 	}
 	printf("%s\n", buf);
@@ -265,8 +265,8 @@ void regress(void)
 				sa.proto = 77;
 			n = satot(&sa, (char)r->format, buf, sizeof(buf));
 			if (n > sizeof(buf)) {
-				printf("`%s' satot failed:  need %zd\n",
-					r->input, n);
+				printf("`%s' satot failed:  need %ld\n",
+					r->input, (long)n);
 				status = 1;
 			} else if (!streq(r->output, buf)) {
 				printf("`%s' gave `%s', expected `%s'\n",

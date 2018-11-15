@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -33,6 +33,9 @@
 
 #include <unistd.h>
 #include <libreswan.h>
+#if 0
+#include <linux/autoconf.h>     /* CONFIG_IPSEC_PFKEYv2 */
+#endif
 
 /* permanently turn it on since netlink support has been disabled */
 #include <signal.h>
@@ -52,6 +55,7 @@
 #include <stdio.h>
 #include <getopt.h>
 
+#include "lsw_select.h"
 #include "lswlog.h"
 __u32 bigbuf[1024];
 char *program_name;
@@ -66,7 +70,7 @@ char copyright[] =
    This program is free software; you can redistribute it and/or modify it\n\
    under the terms of the GNU General Public License as published by the\n\
    Free Software Foundation; either version 2 of the License, or (at your\n\
-   option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.\n\
+   option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.\n\
 \n\
    This program is distributed in the hope that it will be useful, but\n\
    WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY\n\
@@ -341,7 +345,7 @@ int main(int argc, char **argv)
 			break;
 		case EBUSY:
 			fprintf(stderr,
-				"KLIPS is busy.  Most likely a serious internal error occurred in a previous command.  Please report as much detail as possible to development team.\n");
+				"KLIPS is busy.  Most likely a serious internal error occured in a previous command.  Please report as much detail as possible to development team.\n");
 			break;
 		case EINVAL:
 			fprintf(stderr,
@@ -450,7 +454,7 @@ int main(int argc, char **argv)
 			break;
 		case EBUSY:
 			fprintf(stderr,
-				"KLIPS is busy.  Most likely a serious internal error occurred in a previous command.  Please report as much detail as possible to development team.\n");
+				"KLIPS is busy.  Most likely a serious internal error occured in a previous command.  Please report as much detail as possible to development team.\n");
 			break;
 		case EINVAL:
 			fprintf(stderr,

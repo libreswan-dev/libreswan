@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,16 +17,6 @@
  * for more details.
  *
  */
-
-#include "rnd.h"
-#include <pk11pub.h>
-
-#include "lswnss.h"
-#include "lswlog.h"
-#include "ike_spi.h"		/* for refresh_ike_spi_secret() */
-#include "ikev2_cookie.h"	/* for refresh_v2_cookie_secret() */
-
-#include "timer.h"
 
 /* A true random number generator (we hope)
  *
@@ -65,21 +55,39 @@
  *   exchange.  Eventually, one per informational exchange.
  */
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <fcntl.h>
+#include <time.h>
+
+#include <libreswan.h>
+
+#include "sha1.h"
+#include "constants.h"
+#include "defs.h"
+#include "rnd.h"
+#include "log.h"
+#include "timer.h"
+
+#include <nss.h>
+#include <pk11pub.h>
+
 void get_rnd_bytes(u_char *buffer, int length)
 {
 	SECStatus rv = PK11_GenerateRandom(buffer, length);
+
 	if (rv != SECSuccess) {
-		LSWLOG_PASSERT(buf) {
-			lswlogs(buf, "NSS RNG failed");
-			lswlog_nss_error(buf);
-		}
+		loglog(RC_LOG_SERIOUS, "NSS RNG failed");
+		abort();
 	}
 }
 
-void fill_rnd_chunk(chunk_t chunk)
-{
-	get_rnd_bytes(chunk.ptr, chunk.len);
-}
+u_char secret_of_the_day[SHA1_DIGEST_SIZE];
+u_char ikev2_secret_of_the_day[SHA1_DIGEST_SIZE];
 
 void init_secret(void)
 {
@@ -87,7 +95,6 @@ void init_secret(void)
 	 * Generate the secret value for responder cookies, and
 	 * schedule an event for refresh.
 	 */
-	refresh_ike_spi_secret();
-	refresh_v2_cookie_secret();
-	event_schedule_s(EVENT_REINIT_SECRET, EVENT_REINIT_SECRET_DELAY, NULL);
+	get_rnd_bytes(secret_of_the_day, sizeof(secret_of_the_day));
+	event_schedule(EVENT_REINIT_SECRET, EVENT_REINIT_SECRET_DELAY, NULL);
 }

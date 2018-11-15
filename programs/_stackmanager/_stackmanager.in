@@ -8,7 +8,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,7 +23,7 @@ IPSEC_CONF="${IPSEC_CONF:-@FINALCONFFILE@}"
 PATH=@FINALSBINDIR@:${PATH}
 export PATH
 # export config setup items needs rename of - to _
-eval $(ASAN_OPTIONS=detect_leaks=0 ipsec addconn  --configsetup | grep -v "#" | sed "s/-/_/g")
+eval $(ASAN_OPTIONS=detect_leaks=0 ipsec addconn  --configsetup|sed "s/-/_/g")
 
 test ${IPSEC_INIT_SCRIPT_DEBUG} && set -v -x
 MODPROBE="@MODPROBEBIN@ @MODPROBEARGS@"
@@ -66,7 +66,7 @@ stopnetkey() {
 		xfrm6_mode_tunnel xfrm6_mode_beet xfrm6_mode_ro \
 		xfrm6_mode_transport xfrm4_mode_transport xfrm4_mode_tunnel \
 		xfrm4_tunnel xfrm4_mode_beet esp4 esp6 ah4 ah6 af_key \
-		xfrm_user xfrm_interface
+		xfrm_user
 	    do
 		# first try and unload the modules without the 10s wait pause
 		if [ -n "$(egrep ^${mod} /proc/modules)" ]; then
@@ -142,12 +142,6 @@ startnetkey() {
     # Also Time before reserved kernel SPI times out
     [ -w /proc/sys/net/core/xfrm_acq_expires ] && \
 	echo ${xfrmlifetime} >/proc/sys/net/core/xfrm_acq_expires || : not writeable
-
-    # Fail on error in loading NETKEY/XFRM stack
-    if [ ! -f ${kamepfkey} ]; then
-	echo "FAILURE in loading NETKEY/XFRM stack" >&2
-	exit 1
-    fi
 }
 
 stopklips() {
@@ -237,7 +231,7 @@ cryptomodules() {
     modules="aesni-intel aes-x86_64 geode-aes aes aes_generic des sha512 \
 	sha256 md5 cbc xcbc ecb twofish blowfish serpent ccm gcm ctr cts \
 	deflate cast5 cast6 lzo sha256_generic sha512_generic camellia \
-	cmac chacha20poly1305 ${modules}"
+	${modules}"
     for module in ${modules}
     do
 	module=$(basename ${module} | sed "s/\.ko$//")
@@ -425,7 +419,7 @@ if [ "$2" = "--netkey" ]; then
 	# manual override for use in docker
 	stack=netkey
 else
-	stack="$(ASAN_OPTIONS=detect_leaks=0 ipsec addconn --config ${IPSEC_CONF} --liststack | grep -v "#")"
+	stack="$(ASAN_OPTIONS=detect_leaks=0 ipsec addconn --config ${IPSEC_CONF} --liststack)"
 fi
 
 case ${stack} in

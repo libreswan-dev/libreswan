@@ -24,7 +24,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -65,7 +65,7 @@ if [ $(id -u) -ne 0 ]; then
 fi
 
 if [ $(ip addr list | grep -c cipsec) -ne 0 ]; then
-    echo "Cisco IPsec client is already loaded, aborting! (cipsec# device found)"
+    echo "Cisco IPSec client is already loaded, aborting! (cipsec# device found)"
     exit 1
 fi
 
@@ -75,7 +75,7 @@ IPSEC_EXECDIR="${IPSEC_EXECDIR:-@IPSEC_EXECDIR@}"
 IPSEC_SBINDIR="${IPSEC_SBINDIR:-@IPSEC_SBINDIR@}"
 unset PLUTO_OPTIONS
 
-rundir=@IPSEC_RUNDIR@
+rundir=@FINALVARDIR@/run/pluto
 plutopid=${rundir}/pluto.pid
 plutoctl=${rundir}/pluto.ctl
 lockdir=@FINALVARDIR@/lock/subsys
@@ -107,7 +107,7 @@ verify_config() {
     config_error=$(ipsec addconn --config ${IPSEC_CONF} --checkconfig 2>&1)
     RETVAL=$?
     if [ ${RETVAL} -gt 0 ]; then
-	echo "Configuration error - the following error occurred:"
+	echo "Configuration error - the following error occured:"
 	echo ${config_error}
 	echo "IKE daemon status was not modified"
 	exit ${RETVAL}
@@ -144,17 +144,16 @@ start() {
 	rm -f ${lockfile}
     fi
     echo
-    if [ -f @FINALLIBEXECDIR@/portexcludes ] ; then
-	@FINALLIBEXECDIR@/portexcludes
-    fi
     return ${RETVAL}
 }
 
 
 stop() {
-    if [ -e ${plutoctl} ]; then
+    if [ ! -e ${plutoctl} ]; then
+	echo "Missing control file ${plutoctl} - is pluto still running?"
+    else
 	echo "Shutting down pluto IKE daemon"
-	ipsec whack --shutdown 2>/dev/null
+	ipsec whack --shutdown
 	# don't use seq, might not exist on embedded
 	for waitsec in 1 2 3 4 5 6 7 8 9 10; do
 	    if [ -s ${plutopid} ]; then
@@ -166,25 +165,27 @@ stop() {
 	done
 	echo
 	rm -f ${plutoctl} # we won't be using this anymore
-    fi
-    if [ -s ${plutopid} ]; then
-	# pluto did not die peacefully
-	pid=$(cat ${plutopid})
-	if [ -d /proc/${pid} ]; then
-	    kill -TERM ${pid}
-	    RETVAL=$?
-	    sleep 5;
+
+	if [ -s ${plutopid} ]; then
+	    # pluto did not die peacefully
+	    echo "Attempt to shut Pluto down failed!  Trying kill"
+	    pid=$(cat ${plutopid})
 	    if [ -d /proc/${pid} ]; then
-		kill -KILL ${pid}
+		kill -TERM ${pid}
 		RETVAL=$?
+		sleep 5;
+		if [ -d /proc/${pid} ]; then
+		    kill -KILL ${pid}
+		    RETVAL=$?
+		fi
+		if [ ${RETVAL} -ne 0 ]; then
+		    echo "Kill failed - removing orphaned ${plutopid}"
+		fi
+	    else
+		echo "Removing orphaned ${plutopid}"
 	    fi
-	    if [ ${RETVAL} -ne 0 ]; then
-		echo "Kill failed - removing orphaned ${plutopid}"
-	    fi
-	else
-	    echo "Removing orphaned ${plutopid}"
+	    rm -f ${plutopid}
 	fi
-	rm -f ${plutopid}
     fi
 
     ipsec _stackmanager stop
@@ -293,7 +294,7 @@ case "$1" in
     status)
 	status
 	RETVAL=$?
-	${IPSEC_EXECDIR}/whack --status 2>/dev/null | grep Total | sed 's/^000\ Total\ //'
+	${IPSEC_EXECDIR}/whack --status | grep Total | sed 's/^000\ Total\ //'
 	;;
     version)
 	version

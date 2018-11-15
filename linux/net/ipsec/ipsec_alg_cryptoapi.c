@@ -5,13 +5,11 @@
  *      Harpo MAxx <harpo@linuxmendoza.org.ar>
  *      JuanJo Ciarlante <jjo-ipsec@mendoza.gov.ar>
  *      Luciano Ruete <docemeses@softhome.net>
- *      (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
- *      (C) 2017 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -52,12 +50,6 @@
 #include <linux/types.h>        /* size_t */
 #include <linux/string.h>
 
-#include "libreswan/ipsec_kversion.h"
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
-# include <crypto/hash.h>
-#endif
-
 /* Check if __exit is defined, if not null it */
 #ifndef __exit
 #define __exit
@@ -75,16 +67,6 @@
 #include "libreswan/ipsec_xform.h"
 
 #include <linux/crypto.h>
-#ifdef HAS_SKCIPHER
-#include <crypto/skcipher.h>
-
-#define crypto_has_blkcipher    crypto_has_skcipher
-#define crypto_alloc_blkcipher  crypto_alloc_skcipher
-#define crypto_blkcipher_tfm    crypto_skcipher_tfm
-#define crypto_blkcipher_setkey crypto_skcipher_setkey
-#define crypto_blkcipher_ivsize crypto_skcipher_ivsize
-#define crypto_blkcipher_cast   __crypto_skcipher_cast
-#endif /* HAS_SKCIPHER */
 #ifdef CRYPTO_API_VERSION_CODE
 #warning \
 	"Old CryptoAPI is not supported. Only linux-2.4.22+ or linux-2.6.x are supported"
@@ -180,18 +162,15 @@ struct hash_desc {
 	struct crypto_tfm *tfm;
 };
 	#define hmac(X)                                                 #X
-#ifdef HAS_AHASH
-	#define crypto_has_ahash(X, Y, Z) 		crypto_alg_available(X,0)
-
-	#define crypto_alloc_ahash(X, Y, Z)              crypto_alloc_tfm(X, 0)
-	#define crypto_ahash_digest(W, X, Y, Z)  crypto_digest_digest((W)->tfm, X, sg_num, Z)
-#else
-	#define crypto_alloc_hash(X, Y, Z)              crypto_alloc_tfm(X, 0)
-	#define crypto_hash_digestsize(X) crypto_tfm_alg_digestsize(X)
-	#define crypto_hash_digest(W, X, Y, Z) crypto_digest_digest((W)->tfm, X, sg_num, Z)
-#endif
+	#define crypto_has_hash(X, Y, Z)                crypto_alg_available(X, \
+									     0)
 	#define crypto_hash_cast(X)                             X
 	#define crypto_hash_tfm(X)                              X
+	#define crypto_alloc_hash(X, Y, Z)              crypto_alloc_tfm(X, 0)
+	#define crypto_hash_digestsize(X) \
+	crypto_tfm_alg_digestsize(X)
+	#define crypto_hash_digest(W, X, Y, Z)  \
+	crypto_digest_digest((W)->tfm, X, sg_num, Z)
 
 /* Asymmetric Cipher */
 	#define crypto_has_cipher(X, Y, Z)              crypto_alg_available(X, \
@@ -239,7 +218,7 @@ module_param(test_crypto, int, 0644);
 module_param(excl_crypto, int, 0644);
 module_param(noauto, int, 0644);
 
-MODULE_PARM_DESC(noauto, "Don't try all known algos, just setup enabled ones");
+MODULE_PARM_DESC(noauto, "Dont try all known algos, just setup enabled ones");
 
 static int cipher_null[] = { -1, -1 };
 static int des_ede3[] = { -1, -1 };
@@ -338,12 +317,8 @@ static int setup_ipsec_alg_capi_cipher(struct ipsec_alg_capi_cipher *cptr)
 	cptr->alg.ixt_common.ixt_version = IPSEC_ALG_VERSION;
 	cptr->alg.ixt_common.ixt_module  = THIS_MODULE;
 	atomic_set(&cptr->alg.ixt_common.ixt_refcnt, 0);
-	/* fill_and_terminate(cptr->alg.ixt_common.ixt_name, cptr->ciphername,
-	 *	sizeof(cptr->alg.ixt_common.ixt_name));
-	 */
 	strncpy(cptr->alg.ixt_common.ixt_name, cptr->ciphername,
-		sizeof(cptr->alg.ixt_common.ixt_name)-1);
-	cptr->alg.ixt_common.ixt_name[sizeof(cptr->alg.ixt_common.ixt_name)-1] = '\0';
+		sizeof(cptr->alg.ixt_common.ixt_name));
 
 	cptr->alg.ixt_common.ixt_blocksize = cptr->blocksize;
 	cptr->alg.ixt_common.ixt_support.ias_keyminbits = cptr->minbits;
@@ -451,11 +426,7 @@ static int _capi_cbc_encrypt(struct ipsec_alg_enc *alg, __u8 * key_e,
 	int error = 0;
 	struct crypto_tfm *tfm = (struct crypto_tfm *)key_e;
 	struct scatterlist sg;
-#ifdef HAS_SKCIPHER
-	SKCIPHER_REQUEST_ON_STACK(req, __crypto_skcipher_cast(tfm));
-#else
 	struct blkcipher_desc desc;
-#endif
 	int ivsize = crypto_blkcipher_ivsize(crypto_blkcipher_cast(tfm));
 	char ivp[ivsize];
 
@@ -473,18 +444,6 @@ static int _capi_cbc_encrypt(struct ipsec_alg_enc *alg, __u8 * key_e,
 	sg_init_table(&sg, 1);
 	sg_set_page(&sg, virt_to_page(in), ilen, offset_in_page(in));
 
-#ifdef HAS_SKCIPHER
-	skcipher_request_set_tfm(req, crypto_blkcipher_cast(tfm));
-	skcipher_request_set_callback(req, 0, NULL, NULL);
-	skcipher_request_set_crypt(req, &sg, &sg, ilen, (void*)&ivp[0]);
-
-	if (encrypt)
-		error = crypto_skcipher_encrypt(req);
-	else
-		error = crypto_skcipher_decrypt(req);
-
-	skcipher_request_zero(req);
-#else
 	memset(&desc, 0, sizeof(desc));
 	desc.tfm = crypto_blkcipher_cast(tfm);
 	desc.info = (void *) &ivp[0];
@@ -493,7 +452,6 @@ static int _capi_cbc_encrypt(struct ipsec_alg_enc *alg, __u8 * key_e,
 		error = crypto_blkcipher_encrypt_iv(&desc, &sg, &sg, ilen);
 	else
 		error = crypto_blkcipher_decrypt_iv(&desc, &sg, &sg, ilen);
-#endif
 	if (debug_crypto > 1)
 		printk(KERN_DEBUG "klips_debug:_capi_cbc_encrypt:"
 		       "error=%d\n",
@@ -525,13 +483,14 @@ static int setup_cipher_list(struct ipsec_alg_capi_cipher *clist)
 				       cptr->parm[0],
 				       cptr->parm[1]);
 			continue;
+		} else {
+			if (debug_crypto > 0)
+				printk(KERN_INFO "setup_cipher_list(): going to init ciphername=%s: noauto=%d parm[0]=%d parm[1]=%d\n",
+					cptr->ciphername,
+					noauto,
+					cptr->parm[0],
+					cptr->parm[1]);
 		}
-		if (debug_crypto > 0)
-			printk(KERN_INFO "setup_cipher_list(): going to init ciphername=%s: noauto=%d parm[0]=%d parm[1]=%d\n",
-				cptr->ciphername,
-				noauto,
-				cptr->parm[0],
-				cptr->parm[1]);
 		/*
 		 *      use a local ci to avoid touching cptr->ci,
 		 *      if register ipsec_alg success then bind cipher
@@ -602,11 +561,7 @@ static int test_cipher_list(struct ipsec_alg_capi_cipher *clist)
  */
 int setup_digest(const char *digestname)
 {
-#ifdef HAS_AHASH
-    return crypto_has_ahash(digestname, 0, 0);
-#else
     return crypto_has_hash(digestname, 0, 0);
-#endif
 }
 /*
  *      setups ipsec_alg_capi_dgest "hyper" struct components, calling
@@ -622,18 +577,15 @@ setup_ipsec_alg_capi_digest(struct ipsec_alg_capi_digest *dptr)
 	int ret;
 	dptr->alg.ixt_common.ixt_version = IPSEC_ALG_VERSION;
 	dptr->alg.ixt_common.ixt_module  = THIS_MODULE;
-	atomic_set(& dptr->alg.ixt_common.ixt_refcnt, 0);
-	/* fill_and_terminate(dptr->alg.ixt_common.ixt_name, dptr->digestname, sizeof(dptr->alg.ixt_common.ixt_name)); */
-	strncpy(dptr->alg.ixt_common.ixt_name, dptr->digestname, sizeof(dptr->alg.ixt_common.ixt_name)-1);
-	dptr->alg.ixt_common.ixt_name[sizeof(dptr->alg.ixt_common.ixt_name)-1] = '\0';
+	atomic_set (& dptr->alg.ixt_common.ixt_refcnt, 0);
+	strncpy (dptr->alg.ixt_common.ixt_name , dptr->digestname, sizeof (dptr->alg.ixt_common.ixt_name));
 
 	dptr->alg.ixt_common.ixt_blocksize=dptr->blocksize;
 	dptr->alg.ixt_common.ixt_support.ias_keyminbits=dptr->minbits;
 	dptr->alg.ixt_common.ixt_support.ias_keymaxbits=dptr->maxbits;
 	dptr->alg.ixt_common.ixt_support.ias_ivlen=0;
 	dptr->alg.ixt_common.ixt_state = 0;
-	if (excl_crypto)
-		dptr->alg.ixt_common.ixt_state |= IPSEC_ALG_ST_EXCL;
+	if (excl_crypto) dptr->alg.ixt_common.ixt_state |= IPSEC_ALG_ST_EXCL;
 	dptr->alg.ixt_a_keylen=dptr->alg.ixt_common.ixt_support.ias_keymaxbits/8;
 	dptr->alg.ixt_a_ctx_size = sizeof(struct crypto_tfm);
 	dptr->alg.ixt_a_authlen = dptr->authlen;
@@ -663,11 +615,7 @@ setup_ipsec_alg_capi_digest(struct ipsec_alg_capi_digest *dptr)
 static void
 _capi_destroy_hmac_key (struct ipsec_alg_auth *alg, __u8 *key_a)
 {
-#ifdef HAS_AHASH
-	struct crypto_ahash *tfm = (struct crypto_ahash*)key_a;
-#else
-	struct  crypto_hash *tfm = (struct  crypto_hash*)key_a;
-#endif
+	struct crypto_tfm *tfm=(struct crypto_tfm*)key_a;
 
 	if (debug_crypto > 0)
 		printk(KERN_DEBUG "klips_debug: _capi_destroy_hmac_key:"
@@ -679,12 +627,7 @@ _capi_destroy_hmac_key (struct ipsec_alg_auth *alg, __u8 *key_a)
 		       alg->ixt_common.ixt_name);
 		return;
 	}
-
-#ifdef HAS_AHASH
-	crypto_free_ahash(tfm);
-#else
-	crypto_free_hash(tfm);
-#endif
+	crypto_free_tfm(tfm);
 }
 /*
  *      create hash
@@ -694,11 +637,7 @@ static __u8 *
 _capi_hmac_new_key(struct ipsec_alg_auth *alg, const __u8 *key, int keylen)
 {
 	struct ipsec_alg_capi_digest *dptr;
-#ifdef HAS_AHASH
-	struct crypto_ahash *tfm  = NULL;
-#else
 	struct crypto_hash *tfm  = NULL;
-#endif
 	int ret = 0;
 
 	dptr = alg->ixt_common.ixt_data;
@@ -712,31 +651,20 @@ _capi_hmac_new_key(struct ipsec_alg_auth *alg, const __u8 *key, int keylen)
 		printk(KERN_DEBUG "klips_debug:_capi_hmac_new_key_auth:"
 				"name=%s dptr=%p key=%p keysize=%d\n",
 				alg->ixt_common.ixt_name, dptr, key, keylen);
-#ifdef HAS_AHASH
-	tfm = crypto_alloc_ahash(dptr->digestname, 0, CRYPTO_ALG_ASYNC);
-#else
+
 	tfm = crypto_alloc_hash(dptr->digestname, 0, CRYPTO_ALG_ASYNC);
-#endif
 	if (IS_ERR(tfm)) {
 		printk(KERN_ERR "_capi_hmac_new_key_auth(): "
 				"NULL hmac for \"%s\" cryptoapi (\"%s\") algo\n"
 				, alg->ixt_common.ixt_name, dptr->digestname);
 		goto err;
 	}
-#ifdef HAS_AHASH
-	if (crypto_ahash_setkey(tfm, key, keylen)<0)
-#else
 	if (crypto_hash_setkey(tfm, key, keylen)<0)
-#endif
 	{
 		printk(KERN_ERR "_capi_hmac_new_key_auth(): "
 				"failed set_key() for \"%s\" cryptoapi algo (key=%p, keylen=%d, err=%d)\n"
 				, alg->ixt_common.ixt_name, key, keylen, ret);
-#ifdef HAS_AHASH
-		crypto_free_ahash(tfm);
-#else
 		crypto_free_hash(tfm);
-#endif
 		tfm=NULL;
 		goto err;
 	}
@@ -754,14 +682,9 @@ err:
 static int
 _capi_hmac_hash(struct ipsec_alg_auth *alg, __u8 *key_a, const __u8 *dat, int len, __u8 *hash, int hashlen)
 {
-#ifdef HAS_AHASH
-	struct crypto_ahash *tfm = (struct crypto_ahash*)key_a;
-	struct ahash_request *req;
-#else
 	struct crypto_hash *tfm = (struct crypto_hash*)key_a;
-	struct hash_desc desc;
-#endif
 	struct scatterlist sg;
+	struct hash_desc desc;
 	int ret = 0;
 	char hash_buf[512];
 
@@ -780,25 +703,13 @@ _capi_hmac_hash(struct ipsec_alg_auth *alg, __u8 *key_a, const __u8 *dat, int le
 	sg_init_table(&sg, 1);
 	sg_set_buf(&sg, dat, len);
 
-#ifdef HAS_AHASH
-	req = ahash_request_alloc(tfm, GFP_ATOMIC);
-	if (!req)
-		return -1;
-
-	ahash_request_set_callback(req, 0, NULL, NULL);
-	ahash_request_set_crypt(req, &sg, hash_buf, len);
-	ret = crypto_ahash_digest(req);
-#else
 	memset(&desc, 0, sizeof(desc));
 	desc.tfm = tfm;
 	desc.flags = 0;
 
 	ret = crypto_hash_digest(&desc, &sg, len, hash_buf);
-#endif
 	memcpy(hash, hash_buf, hashlen);
-#ifdef HAS_AHASH
-	ahash_request_free(req);
-#endif
+
 	return ret;
 }
  /*
@@ -826,21 +737,20 @@ setup_digest_list (struct ipsec_alg_capi_digest* dlist)
 					, dptr->parm[0]
 					, dptr->parm[1]);
 			continue;
-		}
-
-		if (debug_crypto>0)
-			printk(KERN_INFO "setup_digest_list(): going to init digest=%s: noauto=%d parm[0]=%d parm[1]=%d\n"
-			, dptr->digestname
-			, noauto
-			, dptr->parm[0]
-			, dptr->parm[1]);
-
+		} else {
+ 			if (debug_crypto>0)
+ 				printk(KERN_INFO "setup_digest_list(): going to init digest=%s: noauto=%d parm[0]=%d parm[1]=%d\n"
+ 				, dptr->digestname
+				, noauto
+				, dptr->parm[0]
+				, dptr->parm[1]);
+			}
 		/*
 		 * 	use a local ci to avoid touching dptr->ci,
 		 * 	if register ipsec_alg success then bind digest
 		 */
 		if (dptr->alg.ixt_common.ixt_support.ias_name == NULL) {
-			dptr->alg.ixt_common.ixt_support.ias_name = dptr->digestname;
+		   dptr->alg.ixt_common.ixt_support.ias_name = dptr->digestname;
 		}
 
 		if (setup_digest(dptr->digestname) ) {
