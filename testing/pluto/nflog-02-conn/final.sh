@@ -1,10 +1,10 @@
-ipsec look
+../../pluto/bin/ipsec-look.sh
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
 ipsec stop
 # show no nflog left behind
 iptables -L -n
-if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
+../bin/check-for-core.sh
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

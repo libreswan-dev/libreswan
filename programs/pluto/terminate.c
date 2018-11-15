@@ -9,7 +9,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -31,7 +31,6 @@
 
 #include <libreswan.h>
 #include "libreswan/pfkeyv2.h"
-#include "kameipsec.h"
 
 #include "sysdep.h"
 #include "constants.h"
@@ -53,7 +52,6 @@
 #include "kernel.h"     /* needs connections.h */
 #include "log.h"
 #include "keys.h"
-#include "dnskey.h"     /* needs keys.h and adns.h */
 #include "whack.h"
 #include "alg_info.h"
 #include "spdb.h"
@@ -76,10 +74,13 @@ static int terminate_a_connection(struct connection *c, void *arg UNUSED)
 
 	if (shared_phase1_connection(c)) {
 		libreswan_log("IKE SA is shared - only terminating IPsec SA");
-		if (c->newest_ipsec_sa != SOS_NOBODY)
-			delete_state(state_with_serialno(c->newest_ipsec_sa));
+		if (c->newest_ipsec_sa != SOS_NOBODY) {
+			struct state *st = state_with_serialno(c->newest_ipsec_sa);
+			set_cur_state(st);
+			delete_state(st);
+		}
 	} else {
-		DBG(DBG_CONTROL, DBG_log("connection not shared pkilling phase1 and phase2"));
+		DBG(DBG_CONTROL, DBG_log("connection not shared - terminating IKE and IPsec SA"));
 		delete_states_by_connection(c, FALSE);
 	}
 
@@ -92,9 +93,10 @@ void terminate_connection(const char *name)
 {
 	/*
 	 * Loop because more than one may match (master and instances)
-	 * But at least one is required (enforced by con_by_name).
+	 * But at least one is required (enforced by conn_by_name).
+	 * Don't log an error if not found before we checked aliases
 	 */
-	struct connection *c = con_by_name(name, TRUE);
+	struct connection *c = conn_by_name(name, TRUE, TRUE);
 
 	if (c != NULL) {
 		while (c != NULL) {
@@ -107,14 +109,13 @@ void terminate_connection(const char *name)
 			c = n;
 		}
 	} else {
-		int count;
-
-		loglog(RC_COMMENT, "terminating all conns with alias='%s'", name);
-		count = foreach_connection_by_alias(name, terminate_a_connection, NULL);
-
+		int count = foreach_connection_by_alias(name, terminate_a_connection, NULL);
 		if (count == 0) {
-			whack_log(RC_UNKNOWN_NAME,
-				  "no connection named \"%s\"", name);
+			loglog(RC_UNKNOWN_NAME,
+				  "no such connection or aliased connection named \"%s\"", name);
+		} else {
+			loglog(RC_COMMENT, "terminated %d connections from aliased connection \"%s\"",
+				count, name);
 		}
 	}
 }

@@ -5,16 +5,17 @@
  * Copyright (C) 2004-2006 Michael Richardson <mcr@xelerance.com>
  * Copyright (C) 2010,2013 D. Hugh Redelmeier <hugh@mimosa.com>
  * Copyright (C) 2011 Mattias Walström <lazzer@vmlinux.org>
- * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
+ * Copyright (C) 2012-2017 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Philippe Vouters <Philippe.Vouters@laposte.net>
  * Copyright (C) 2013 Antony Antony <antony@phenome.org>
  * Copyright (C) 2013 Matt Rogers <mrogers@redhat.com>
  * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2017 Paul Wouters <pwouters@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -36,7 +37,6 @@
 
 #include "ipsecconf/starterwhack.h"
 #include "ipsecconf/confread.h"
-#include "ipsecconf/files.h"
 #include "ipsecconf/starterlog.h"
 
 #include "socketwrapper.h"
@@ -50,7 +50,7 @@
 #include "lswlog.h"
 #include "whack.h"
 #include "id.h"
-
+#include "ip_address.h"
 
 static void update_ports(struct whack_message * m)
 {
@@ -82,7 +82,7 @@ static int send_reply(int sock, char *buf, ssize_t len)
 }
 
 static int starter_whack_read_reply(int sock,
-				char username[MAX_USERNAME_LEN],
+				char xauthusername[MAX_XAUTH_USERNAME_LEN],
 				char xauthpass[XAUTH_MAX_PASS_LENGTH],
 				int usernamelen,
 				int xauthpasslen)
@@ -184,22 +184,22 @@ static int starter_whack_read_reply(int sock,
 				case RC_USERPROMPT:
 					if (usernamelen == 0) {
 						usernamelen = whack_get_value(
-							username,
-							MAX_USERNAME_LEN);
+							xauthusername,
+							MAX_XAUTH_USERNAME_LEN);
 					}
 					if (usernamelen >
-						MAX_USERNAME_LEN) {
+						MAX_XAUTH_USERNAME_LEN) {
 						/*
 						 * for input >= 128,
 						 * useramelen would be 129
 						 */
 						usernamelen =
-							MAX_USERNAME_LEN;
+							MAX_XAUTH_USERNAME_LEN;
 						starter_log(LOG_LEVEL_ERR,
 							"username cannot be >= %d chars",
-							MAX_USERNAME_LEN);
+							MAX_XAUTH_USERNAME_LEN);
 					}
-					ret = send_reply(sock, username,
+					ret = send_reply(sock, xauthusername,
 							usernamelen);
 					if (ret != 0)
 						return ret;
@@ -218,7 +218,7 @@ static int starter_whack_read_reply(int sock,
 	return ret;
 }
 
-static int send_whack_msg(struct whack_message *msg, char *ctlbase)
+static int send_whack_msg(struct whack_message *msg, char *ctlsocket)
 {
 	struct sockaddr_un ctl_addr = { .sun_family = AF_UNIX };
 	int sock;
@@ -228,7 +228,7 @@ static int send_whack_msg(struct whack_message *msg, char *ctlbase)
 	int ret;
 
 	/* copy socket location */
-	strncpy(ctl_addr.sun_path, ctlbase, sizeof(ctl_addr.sun_path) - 1);
+	fill_and_terminate(ctl_addr.sun_path, ctlsocket, sizeof(ctl_addr.sun_path));
 
 	/*  Pack strings */
 	wp.msg = msg;
@@ -253,8 +253,10 @@ static int send_whack_msg(struct whack_message *msg, char *ctlbase)
 		return -1;
 	}
 	if (connect(sock, (struct sockaddr *)&ctl_addr,
-			offsetof(struct sockaddr_un,
-				sun_path) + strlen(ctl_addr.sun_path)) < 0) {
+			offsetof(struct sockaddr_un, sun_path) +
+				strlen(ctl_addr.sun_path)) <
+		0)
+	{
 		starter_log(LOG_LEVEL_ERR, "connect(pluto_ctl) failed: %s",
 			strerror(errno));
 		close(sock);
@@ -271,10 +273,10 @@ static int send_whack_msg(struct whack_message *msg, char *ctlbase)
 
 	/* read reply */
 	{
-		char username[MAX_USERNAME_LEN];
+		char xauthusername[MAX_XAUTH_USERNAME_LEN];
 		char xauthpass[XAUTH_MAX_PASS_LENGTH];
 
-		ret = starter_whack_read_reply(sock, username, xauthpass, 0,
+		ret = starter_whack_read_reply(sock, xauthusername, xauthpass, 0,
 					0);
 		close(sock);
 	}
@@ -292,7 +294,7 @@ static void init_whack_msg(struct whack_message *msg)
 }
 
 /* NOT RE-ENTRANT: uses a static buffer */
-static char *connection_name(struct starter_conn *conn)
+static char *connection_name(const struct starter_conn *conn)
 {
 	/* If connection name is '%auto', create a new name like conn_xxxxx */
 	static char buf[32];
@@ -307,7 +309,7 @@ static char *connection_name(struct starter_conn *conn)
 
 static void set_whack_end(char *lr,
 			struct whack_end *w,
-			struct starter_end *l)
+			const struct starter_end *l)
 {
 	w->id = l->id;
 	w->host_type = l->addrtype;
@@ -365,12 +367,17 @@ static void set_whack_end(char *lr,
 	if (!isanyaddr(&l->sourceip))
 		w->host_srcip = l->sourceip;
 
+	if (!isanyaddr(&l->vti_ip.addr))
+		w->host_vtiip = l->vti_ip;
+
 	w->has_client = l->has_client;
-	if (l->has_client)
+	if (l->has_client) {
 		w->client = l->subnet;
-	else
+	} else {
+		/* ??? is this a crude way of seting client to anyaddr? */
 		w->client.addr.u.v4.sin_family = l->addr_family;
-	w->updown = l->strings[KSCF_UPDOWN];
+	}
+
 	w->host_port = IKE_UDP_PORT; /* XXX starter should support (nat)-ike-port */
 	w->has_client_wildcard = l->has_client_wildcard;
 	w->has_port_wildcard = l->has_port_wildcard;
@@ -387,7 +394,10 @@ static void set_whack_end(char *lr,
 	if (l->options_set[KNCF_SENDCERT])
 		w->sendcert = l->options[KNCF_SENDCERT];
 	else
-		w->sendcert = cert_alwayssend;
+		w->sendcert = CERT_ALWAYSSEND;
+
+	if (l->options_set[KNCF_AUTH])
+		w->authby = l->options[KNCF_AUTH];
 
 	w->updown = l->updown;
 	w->virt = NULL;
@@ -401,7 +411,7 @@ static void set_whack_end(char *lr,
 	if (l->options_set[KNCF_XAUTHCLIENT])
 		w->xauth_client = l->options[KNCF_XAUTHCLIENT];
 	if (l->strings_set[KSCF_USERNAME])
-		w->username = l->strings[KSCF_USERNAME];
+		w->xauth_username = l->strings[KSCF_USERNAME];
 
 	if (l->options_set[KNCF_MODECONFIGSERVER])
 		w->modecfg_server = l->options[KNCF_MODECONFIGSERVER];
@@ -413,8 +423,8 @@ static void set_whack_end(char *lr,
 }
 
 static int starter_whack_add_pubkey(struct starter_config *cfg,
-				struct starter_conn *conn,
-				struct starter_end *end, const char *lr)
+				const struct starter_conn *conn,
+				const struct starter_end *end, const char *lr)
 {
 	const char *err;
 	char err_buf[TTODATAV_BUF];
@@ -462,7 +472,7 @@ static int starter_whack_add_pubkey(struct starter_config *cfg,
 					    "\tsending %s %srsasigkey=%s",
 					    connection_name(conn), lr, end->rsakey1);
 				msg.keyval.ptr = (unsigned char *)keyspace;
-				ret = send_whack_msg(&msg, cfg->ctlbase);
+				ret = send_whack_msg(&msg, cfg->ctlsocket);
 			}
 		}
 	}
@@ -499,7 +509,7 @@ static int starter_whack_add_pubkey(struct starter_config *cfg,
 					    "\tsending %s %srsasigkey2=%s",
 					    connection_name(conn), lr, end->rsakey1);
 				msg.keyval.ptr = (unsigned char *)keyspace;
-				return send_whack_msg(&msg, cfg->ctlbase);
+				return send_whack_msg(&msg, cfg->ctlsocket);
 			}
 		}
 	}
@@ -507,7 +517,7 @@ static int starter_whack_add_pubkey(struct starter_config *cfg,
 }
 
 static int starter_whack_basic_add_conn(struct starter_config *cfg,
-					struct starter_conn *conn)
+					const struct starter_conn *conn)
 {
 	struct whack_message msg;
 	int r;
@@ -524,6 +534,7 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	if (conn->right.addrtype == KH_IPHOSTNAME)
 		msg.dnshostname = conn->right.strings[KSCF_IP];
 
+	msg.nic_offload = conn->options[KBF_NIC_OFFLOAD];
 	msg.sa_ike_life_seconds = deltatime(conn->options[KBF_IKELIFETIME]);
 	msg.sa_ipsec_life_seconds = deltatime(conn->options[KBF_SALIFETIME]);
 	msg.sa_rekey_margin = deltatime(conn->options[KBF_REKEYMARGIN]);
@@ -531,10 +542,11 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.sa_keying_tries = conn->options[KBF_KEYINGTRIES];
 	msg.sa_replay_window = conn->options[KBF_REPLAY_WINDOW];
 
-	msg.r_interval = conn->options[KBF_RETRANSMIT_INTERVAL];
+	msg.r_interval = deltatime_ms(conn->options[KBF_RETRANSMIT_INTERVAL_MS]);
 	msg.r_timeout = deltatime(conn->options[KBF_RETRANSMIT_TIMEOUT]);
 
 	msg.policy = conn->policy;
+	msg.sighash_policy = conn->sighash_policy;
 
 	msg.connalias = conn->connalias;
 
@@ -596,16 +608,20 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 		msg.send_ca = CA_SEND_NONE;
 
 
-	if (conn->options_set[KBF_FORCEENCAP])
-		msg.forceencaps = conn->options[KBF_FORCEENCAP];
+	if (conn->options_set[KBF_ENCAPS])
+		msg.encaps = conn->options[KBF_ENCAPS];
+	else
+		msg.encaps = yna_auto;
+
 	if (conn->options_set[KBF_NAT_KEEPALIVE])
 		msg.nat_keepalive = conn->options[KBF_NAT_KEEPALIVE];
 	else
 		msg.nat_keepalive = TRUE;
+
 	if (conn->options_set[KBF_IKEV1_NATT])
 		msg.ikev1_natt = conn->options[KBF_IKEV1_NATT];
 	else
-		msg.ikev1_natt = natt_both;
+		msg.ikev1_natt = NATT_BOTH;
 
 
 	/* Activate sending out own vendorid */
@@ -627,9 +643,6 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	if (conn->options_set[KBF_REMOTEPEERTYPE])
 		msg.remotepeertype = conn->options[KBF_REMOTEPEERTYPE];
 
-	if (conn->options_set[KBF_SHA2_TRUNCBUG])
-		msg.sha2_truncbug = conn->options[KBF_SHA2_TRUNCBUG];
-
 #ifdef HAVE_NM
 	/* Network Manager support */
 	if (conn->options_set[KBF_NMCONFIGURED])
@@ -645,28 +658,38 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 		starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" policy_label=%s",
 			conn->name, msg.policy_label);
 	}
-	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" labeled_ipsec=%d",
-		conn->name, msg.labeled_ipsec);
-
 #endif
 
-	msg.modecfg_domain = conn->modecfg_domain;
-	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgdomain=%s",
-		conn->name, msg.modecfg_domain);
+	msg.modecfg_dns = conn->modecfg_dns;
+	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgdns=%s",
+		conn->name, msg.modecfg_dns == NULL ? "<unset>" :
+			msg.modecfg_dns);
+	msg.modecfg_domains = conn->modecfg_domains;
+	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgdomains=%s",
+		conn->name, msg.modecfg_domains == NULL ? "<unset>" :
+			msg.modecfg_domains);
 	msg.modecfg_banner = conn->modecfg_banner;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" modecfgbanner=%s",
-		conn->name, msg.modecfg_banner);
+		conn->name, msg.modecfg_banner == NULL ? "<unset>" :
+			msg.modecfg_banner);
 
+	msg.conn_mark_both = conn->conn_mark_both;
+	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" mark=%s",
+		conn->name, msg.conn_mark_both == NULL ? "<unset>" :
+			msg.conn_mark_both);
 	msg.conn_mark_in = conn->conn_mark_in;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" mark-in=%s",
-		conn->name, msg.conn_mark_in);
+		conn->name, msg.conn_mark_in == NULL ? "<unset>" :
+			msg.conn_mark_in);
 	msg.conn_mark_out = conn->conn_mark_out;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" mark-out=%s",
-		conn->name, msg.conn_mark_out);
+		conn->name, msg.conn_mark_out == NULL ? "<unset>" :
+			msg.conn_mark_out);
 
 	msg.vti_iface = conn->vti_iface;
 	starter_log(LOG_LEVEL_DEBUG, "conn: \"%s\" vti_iface=%s",
-		conn->name, msg.vti_iface);
+		conn->name, msg.vti_iface == NULL ? "<unset>" :
+			msg.vti_iface);
 	if (conn->options_set[KBF_VTI_ROUTING])
 		msg.vti_routing = conn->options[KBF_VTI_ROUTING];
 	if (conn->options_set[KBF_VTI_SHARED])
@@ -676,23 +699,6 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 		msg.xauthby = conn->options[KBF_XAUTHBY];
 	if (conn->options_set[KBF_XAUTHFAIL])
 		msg.xauthfail = conn->options[KBF_XAUTHFAIL];
-
-	if (conn->modecfg_dns1 != NULL) {
-		if (!tnatoaddr(conn->modecfg_dns1, 0, AF_INET,
-				&(msg.modecfg_dns1)) &&
-			!tnatoaddr(conn->modecfg_dns1, 0, AF_INET6,
-				&(msg.modecfg_dns1)))
-			starter_log(LOG_LEVEL_ERR,
-				"Ignoring modecfgdns1= entry, it is not a valid IPv4 or IPv6 address");
-	}
-	if (conn->modecfg_dns2 != NULL) {
-		if (!tnatoaddr(conn->modecfg_dns2, 0, AF_INET,
-				&(msg.modecfg_dns2)) &&
-			!tnatoaddr(conn->modecfg_dns2, 0, AF_INET6,
-				&(msg.modecfg_dns2)))
-			starter_log(LOG_LEVEL_ERR,
-				"Ignoring modecfgdns2= entry, it is not a valid IPv4 or IPv6 address");
-	}
 
 	set_whack_end("left",  &msg.left, &conn->left);
 	set_whack_end("right", &msg.right, &conn->right);
@@ -704,19 +710,25 @@ static int starter_whack_basic_add_conn(struct starter_config *cfg,
 	msg.ike = conn->ike;
 
 
-	r = send_whack_msg(&msg, cfg->ctlbase);
+	r = send_whack_msg(&msg, cfg->ctlsocket);
+	if (r != 0)
+		return r;
 
-	if (r == 0 && (conn->policy & POLICY_RSASIG)) {
+	if (conn->left.rsakey1 != NULL || conn->left.rsakey2 != NULL) {
 		r = starter_whack_add_pubkey(cfg, conn, &conn->left,  "left");
-		if (r == 0)
-			r = starter_whack_add_pubkey(cfg, conn, &conn->right,
-						"right");
+		if (r != 0)
+			return r;
+	}
+	if (conn->right.rsakey1 != NULL || conn->right.rsakey2 != NULL) {
+		r = starter_whack_add_pubkey(cfg, conn, &conn->right,  "right");
+		if (r != 0)
+			return r;
 	}
 
-	return r;
+	return 0;
 }
 
-static bool one_subnet_from_string(struct starter_conn *conn,
+static bool one_subnet_from_string(const struct starter_conn *conn,
 				char **psubnets,
 				int af,
 				ip_subnet *sn,
@@ -768,11 +780,11 @@ static bool one_subnet_from_string(struct starter_conn *conn,
  * (which is usually add/delete/route/etc.)
  *
  */
-int starter_permutate_conns(int
+static int starter_permutate_conns(int
 			(*operation)(struct starter_config *cfg,
-				struct starter_conn *conn),
+				const struct starter_conn *conn),
 			struct starter_config *cfg,
-			struct starter_conn *conn)
+			const struct starter_conn *conn)
 {
 	struct starter_conn sc;
 	int lc, rc;
@@ -842,7 +854,7 @@ int starter_permutate_conns(int
 
 		success = (*operation)(cfg, &sc);
 		if (success != 0) {
-			/* fail at first failure? . I think so */
+			/* Fail at first failure?  I think so. */
 			return success;
 		}
 
@@ -883,11 +895,11 @@ int starter_permutate_conns(int
 }
 
 int starter_whack_add_conn(struct starter_config *cfg,
-			struct starter_conn *conn)
+			const struct starter_conn *conn)
 {
 	/* basic case, nothing special to synthize! */
 	if (!conn->left.strings_set[KSCF_SUBNETS] &&
-		!conn->right.strings_set[KSCF_SUBNETS])
+	    !conn->right.strings_set[KSCF_SUBNETS])
 		return starter_whack_basic_add_conn(cfg, conn);
 
 	return starter_permutate_conns(starter_whack_basic_add_conn,
@@ -895,14 +907,14 @@ int starter_whack_add_conn(struct starter_config *cfg,
 }
 
 static int starter_whack_basic_route_conn(struct starter_config *cfg,
-					struct starter_conn *conn)
+					const struct starter_conn *conn)
 {
 	struct whack_message msg;
 
 	init_whack_msg(&msg);
 	msg.whack_route = TRUE;
 	msg.name = connection_name(conn);
-	return send_whack_msg(&msg, cfg->ctlbase);
+	return send_whack_msg(&msg, cfg->ctlsocket);
 }
 
 int starter_whack_route_conn(struct starter_config *cfg,
@@ -910,7 +922,7 @@ int starter_whack_route_conn(struct starter_config *cfg,
 {
 	/* basic case, nothing special to synthize! */
 	if (!conn->left.strings_set[KSCF_SUBNETS] &&
-		!conn->right.strings_set[KSCF_SUBNETS])
+	    !conn->right.strings_set[KSCF_SUBNETS])
 		return starter_whack_basic_route_conn(cfg, conn);
 
 	return starter_permutate_conns(starter_whack_basic_route_conn,
@@ -926,7 +938,7 @@ int starter_whack_initiate_conn(struct starter_config *cfg,
 	msg.whack_initiate = TRUE;
 	msg.whack_async = TRUE;
 	msg.name = connection_name(conn);
-	return send_whack_msg(&msg, cfg->ctlbase);
+	return send_whack_msg(&msg, cfg->ctlsocket);
 }
 
 int starter_whack_listen(struct starter_config *cfg)
@@ -935,5 +947,5 @@ int starter_whack_listen(struct starter_config *cfg)
 
 	init_whack_msg(&msg);
 	msg.whack_listen = TRUE;
-	return send_whack_msg(&msg, cfg->ctlbase);
+	return send_whack_msg(&msg, cfg->ctlsocket);
 }

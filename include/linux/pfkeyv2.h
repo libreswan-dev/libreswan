@@ -5,9 +5,8 @@
 
 #ifndef _LINUX_PFKEY2_H
 #define _LINUX_PFKEY2_H
-#if defined(linux)
-# include <linux/types.h>
-#endif
+
+#include <stdint.h>
 
 #define PF_KEY_V2               2
 #define PFKEYV2_REVISION        199806L
@@ -49,8 +48,10 @@ struct sadb_lifetime {
 	uint64_t sadb_lifetime_bytes;
 	uint64_t sadb_lifetime_addtime;
 	uint64_t sadb_lifetime_usetime;
+#ifdef NOT_YET
 	uint32_t sadb_x_lifetime_packets;
 	uint32_t sadb_x_lifetime_reserved;
+#endif /* NOT_YET */
 } __attribute__((packed));
 /* sizeof(struct sadb_lifetime) == 32 */
 
@@ -162,7 +163,7 @@ struct sadb_spirange {
 struct sadb_x_kmprivate {
 	uint16_t sadb_x_kmprivate_len;
 	uint16_t sadb_x_kmprivate_exttype;
-	u_int32_t sadb_x_kmprivate_reserved;
+	uint32_t sadb_x_kmprivate_reserved;
 } __attribute__((packed));
 /* sizeof(struct sadb_x_kmprivate) == 8 */
 
@@ -282,6 +283,8 @@ struct sadb_x_nat_t_port {
 #define SADB_X_AALG_AH_AES_128_GMAC     11
 #define SADB_X_AALG_AH_AES_192_GMAC     12
 #define SADB_X_AALG_AH_AES_256_GMAC     13
+
+#define SADB_X_AALG_AES_CMAC_96         250             /* used internally */
 #define SADB_X_AALG_NULL		251	/* kame */
 #define SADB_X_AALG_SHA2_256HMAC_TRUNCBUG	252
 #define SADB_AALG_MAX			255	/* while the AUTH_ALGORITHM is two octets, what is the SADB_AALG? */
@@ -302,8 +305,9 @@ struct sadb_x_nat_t_port {
 #define SADB_X_EALG_AES_GCM_ICV8	18
 #define SADB_X_EALG_AES_GCM_ICV12	19
 #define SADB_X_EALG_AES_GCM_ICV16	20
-#define SADB_X_EALG_NULL_AUTH_AES_GMAC	21
 #define SADB_X_EALG_CAMELLIACBC		22
+#define SADB_X_EALG_NULL_AUTH_AES_GMAC	23
+#define SADB_X_EALG_CHACHA20_POLY1305	28
 
 #define SADB_EALG_MAX			255 /* last EALG */
 /* private allocations should use 249-255 (RFC2407) */

@@ -7,7 +7,7 @@
  * The implementation was written so as to conform with Netscapes SSL.
  *
  * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
+ * the following conditions are adhered to.  The following conditions
  * apply to all code found in this distribution, be it the RC4, RSA,
  * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
  * included with this distribution is covered by the same copyright terms
@@ -32,7 +32,7 @@
  *    must display the following acknowledgement:
  *    "This product includes cryptographic software written by
  *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
+ *    The word 'cryptographic' can be left out if the routines from the library
  *    being used are not cryptographic related :-).
  * 4. If you include any Windows specific code (or a derivative thereof) from
  *    the apps directory (application code) you must include an acknowledgement:
@@ -83,7 +83,7 @@
 #endif
 
 /* This helps C compiler generate the correct code for multiple functional
- * units.  It reduces register dependancies at the expense of 2 more
+ * units.  It reduces register dependencies at the expense of 2 more
  * registers */
 #ifndef DES_RISC1
 #define DES_RISC1
@@ -98,7 +98,7 @@ YOU SHOULD NOT HAVE BOTH DES_RISC1 AND DES_RISC2 DEFINED !!!!!
 #endif
 
 /* Unroll the inner loop, this sometimes helps, sometimes hinders.
- * Very mucy CPU dependant */
+ * Very mucy CPU dependent */
 #ifndef DES_UNROLL
 #define DES_UNROLL
 #endif
@@ -108,7 +108,7 @@ YOU SHOULD NOT HAVE BOTH DES_RISC1 AND DES_RISC2 DEFINED !!!!!
  * They are only used if nothing else has been defined */
 #if !defined(DES_PTR) && !defined(DES_RISC1) && !defined(DES_RISC2) && \
 	!defined(DES_UNROLL)
-/* Special defines which change the way the code is built depending on the
+/* Special defines that change the way the code is built depending on the
    CPU and OS.  For SGI machines you can use _MIPS_SZLONG (32 or 64) to find
    even newer MIPS CPU's, but at the moment one size fits all for
    optimization options.  Older Sparc's work better with only UNROLL, but
@@ -252,7 +252,7 @@ YOU SHOULD NOT HAVE BOTH DES_RISC1 AND DES_RISC2 DEFINED !!!!!
 #define ROTATE(a, n)     (((a) >> (n)) + ((a) << (32 - (n))))
 
 /* Don't worry about the LOAD_DATA() stuff, that is used by
- * fcrypt() to add it's little bit to the front */
+ * fcrypt() to add its little bit to the front */
 
 #ifdef DES_FCRYPT
 
@@ -279,7 +279,7 @@ YOU SHOULD NOT HAVE BOTH DES_RISC1 AND DES_RISC2 DEFINED !!!!!
  * bytes, probably an issue of accessing non-word aligned objects :-( */
 #ifdef DES_PTR
 
-/* It recently occured to me that 0^0^0^0^0^0^0 == 0, so there
+/* It recently occurred to me that 0^0^0^0^0^0^0 == 0, so there
  * is no reason to not xor all the sub items together.  This potentially
  * saves a register since things can be xored directly into L */
 

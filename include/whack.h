@@ -1,17 +1,17 @@
 /* Structure of messages from whack to Pluto proper.
  *
- * Copyright (C) 1998-2001  D. Hugh Redelmeier.
- * Copyright (C) 2012-2013 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 1998-2001,2015-2017 D. Hugh Redelmeier.
+ * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2011 Mika Ilmaranta <ilmis@foobar.fi>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012 Philippe Vouters <Philippe.Vouters@laposte.net>
- * Copyright (C) 2013 Antony Antony <antony@phenome.org>
- * Copyright (C) 2016, Andrew Cagney <cagney@gnu.org>
+ * Copyright (C) 2013,2016 Antony Antony <antony@phenome.org>
+ * Copyright (C) 2016,2018 Andrew Cagney
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,8 +23,23 @@
 #ifndef _WHACK_H
 #define _WHACK_H
 
-#include <libreswan.h>
 #include "ietf_constants.h"
+#include "lset.h"
+#include "lmod.h"
+#include "deltatime.h"
+#include "chunk.h"
+#include "reqid.h"
+#include "err.h"
+#include "impair.h"
+
+#ifndef DEFAULT_RUNDIR
+# define DEFAULT_RUNDIR "/run/pluto/"
+#endif
+
+#ifndef DEFAULT_CTL_SOCKET
+# define DEFAULT_CTL_SOCKET DEFAULT_RUNDIR "/pluto.ctl"
+#endif
+
 
 /* Since the message remains on one host, native representation is used.
  * Think of this as horizontal microcode: all selected operations are
@@ -38,7 +53,7 @@
  * it is likely that the relevant part of the message changes less frequently.
  * Whack uses WHACK_BASIC_MAGIC in those cases.
  *
- * When you increment WHACK_BASIC_MAGIC, reset WHACH_MAGIC's last number to 0.
+ * When you increment WHACK_BASIC_MAGIC, reset WHACK_MAGIC's last number to 0.
  * This allows for more WHACK_BASIC_MAGIC values.
  *
  * NOTE: no value of WHACK_BASIC_MAGIC may equal any value of WHACK_MAGIC.
@@ -46,16 +61,16 @@
  */
 
 #define WHACK_BASIC_MAGIC (((((('w' << 8) + 'h') << 8) + 'k') << 8) + 25)
-#define WHACK_MAGIC (((((('o' << 8) + 'h') << 8) + 'k') << 8) + 43)
+#define WHACK_MAGIC (((((('o' << 8) + 'h') << 8) + 'k') << 8) + 46)
 
 /*
- * Where, if any, is the pubkey comming from.
+ * Where, if any, is the pubkey coming from.
  *
  * This goes across the wire so re-ordering this means bumping whack's
  * version number.
  */
 enum whack_pubkey_type {
-	WHACK_PUBKEY_NONE,
+	WHACK_PUBKEY_NONE = 0,	/* must be zero (to make it default) */
 	WHACK_PUBKEY_CERTIFICATE_NICKNAME,
 	WHACK_PUBKEY_CKAID,
 };
@@ -70,11 +85,14 @@ struct whack_end {
 	char *ca;	/* distinguished name string (if any) -- parsed by pluto */
 	char *groups;	/* access control groups (if any) -- parsed by pluto */
 
+	enum keyword_authby authby;
+
 	enum keyword_host host_type;
 	ip_address host_addr,
 		   host_nexthop,
 		   host_srcip;
-	ip_subnet client;
+	ip_subnet  client,
+		   host_vtiip;
 
 	bool key_from_DNS_on_demand;
 	enum whack_pubkey_type pubkey_type;
@@ -82,14 +100,14 @@ struct whack_end {
 	bool has_client_wildcard;
 	bool has_port_wildcard;
 	char *updown;		/* string */
-	u_int16_t host_port;	/* host order  (for IKE communications) */
-	u_int16_t port;		/* host order */
-	u_int8_t protocol;
+	uint16_t host_port;	/* host order  (for IKE communications) */
+	uint16_t port;		/* host order */
+	uint8_t protocol;
 	char *virt;
 	ip_range pool_range;	/* store start of v4 addresspool */
 	bool xauth_server;	/* for XAUTH */
 	bool xauth_client;
-	char *username;
+	char *xauth_username;
 	bool modecfg_server;	/* for MODECFG */
 	bool modecfg_client;
 	bool cat;		/* IPv4 Client Address Translation */
@@ -116,9 +134,11 @@ struct whack_message {
 
 	bool whack_status;
 	bool whack_global_status;
+	bool whack_clear_stats;
 	bool whack_traffic_status;
 	bool whack_shunt_status;
 	bool whack_fips_status;
+	bool whack_seccomp_crashtest;
 
 	bool whack_shutdown;
 
@@ -134,7 +154,11 @@ struct whack_message {
 
 	bool whack_options;
 
-	lset_t debugging;
+	lmod_t debugging;
+	lmod_t impairing;
+
+	/* what to impair and how */
+	struct whack_impair impairment;
 
 	/* for WHACK_CONNECTION */
 
@@ -142,6 +166,7 @@ struct whack_message {
 	bool whack_async;
 
 	lset_t policy;
+	lset_t sighash_policy;
 	deltatime_t sa_ike_life_seconds;
 	deltatime_t sa_ipsec_life_seconds;
 	deltatime_t sa_rekey_margin;
@@ -149,7 +174,8 @@ struct whack_message {
 	unsigned long sa_keying_tries;
 	unsigned long sa_replay_window;
 	deltatime_t r_timeout; /* in secs */
-	unsigned long  r_interval; /* in msec */
+	deltatime_t r_interval; /* in msec */
+	enum yna_options nic_offload;
 
 	/* For IKEv1 RFC 3706 - Dead Peer Detection */
 	deltatime_t dpd_delay;
@@ -161,7 +187,7 @@ struct whack_message {
 	enum keyword_remotepeertype remotepeertype;
 
 	/* Force the use of NAT-T on a connection */
-	bool forceencaps;
+	enum yna_options encaps;
 
 	/* Option to allow per-conn setting of sending of NAT-T keepalives - default is enabled  */
 	bool nat_keepalive;
@@ -177,19 +203,18 @@ struct whack_message {
 	 */
 	bool cisco_unity;
 
-	/* Option to send strongswan VID to allowe better interop */
+	/* Option to send strongswan VID to allow better interop */
 	bool fake_strongswan;
 
 	/* send our own libreswan vendorid or not */
 	bool send_vendorid;
-
-	bool sha2_truncbug;
 
 	/* Checking if this connection is configured by Network Manager */
 	bool nmconfigured;
 
 	/* XAUTH Authentication can be file (default) PAM or 'alwaysok' */
 	enum keyword_xauthby xauthby;
+
 
 	/* XAUTH failure mode can be hard (default) or soft */
 	enum keyword_xauthfail xauthfail;
@@ -228,9 +253,8 @@ struct whack_message {
 	enum pubkey_alg pubkey_alg;
 	chunk_t keyval;	/* chunk */
 
-	/* for WHACK_MYID: */
-	bool whack_myid;
-	char *myid;	/* string 7 */
+	/* for REMOTE_HOST */
+	char *remote_host;
 
 	/* for WHACK_ROUTE: */
 	bool whack_route;
@@ -244,6 +268,7 @@ struct whack_message {
 	/* for WHACK_OPINITIATE */
 	bool whack_oppo_initiate;
 	ip_address oppo_my_client, oppo_peer_client;
+	int oppo_proto, oppo_dport;
 
 	/* for WHACK_TERMINATE: */
 	bool whack_terminate;
@@ -271,6 +296,8 @@ struct whack_message {
 
 	/* for WHACK_LISTEN: */
 	bool whack_listen, whack_unlisten;
+	long unsigned int ike_buf_size;	/* IKE socket recv/snd buffer size */
+	bool ike_sock_err_toggle; /* toggle MSG_ERRQUEUE on IKE socket */
 
 	/* for DDOS modes */
 	enum ddos_mode whack_ddos;
@@ -290,10 +317,9 @@ struct whack_message {
 	/* for connalias string */
 	char *connalias;
 
-	/* for MODECFG */
-	ip_address modecfg_dns1;
-	ip_address modecfg_dns2;
-	char *modecfg_domain;
+	/* for IKEv1 MODECFG and IKEv2 CP */
+	char *modecfg_dns;
+	char *modecfg_domains;
 	char *modecfg_banner;
 
 	char *conn_mark_both;
@@ -331,11 +357,11 @@ struct whack_message {
 	 * 12 right's updown
 	 * 13 right's virt
 	 * 14 keyid
-	 * 15 myid
+	 * 15 unused (was myid)
 	 * 16 ike
 	 * 17 esp
-	 * 18 left.username
-	 * 19 right.username
+	 * 18 left.xauth_username
+	 * 19 right.xauth_username
 	 * 20 connalias
 	 * 21 left.host_addr_name
 	 * 22 right.host_addr_name
@@ -344,6 +370,7 @@ struct whack_message {
 	 * 25 genstring3
 	 * 26 dnshostname
 	 * 27 policy_label if compiled with with LABELED_IPSEC
+	 * 28 remote_host
 	 * plus keyval (limit: 8K bits + overhead), a chunk.
 	 */
 	size_t str_size;
@@ -368,8 +395,9 @@ struct whack_message {
 
 #define REREAD_NONE	0x00		/* don't reread anything */
 #define REREAD_SECRETS	0x01		/* reread /etc/ipsec.secrets */
-#define REREAD_CRLS	0x02		/* reread crls in /etc/ipsec.d/crls */
-#define REREAD_ALL	LRANGES(REREAD_SECRETS, REREAD_CRLS)	/* all reread options */
+#define REREAD_CRLS	0x02		/* obsoleted - just gives a warning */
+#define REREAD_FETCH	0x04		/* update CRL from distribution point(s) */
+#define REREAD_ALL	LRANGES(REREAD_SECRETS, REREAD_FETCH)	/* all reread options */
 
 struct whackpacker {
 	struct whack_message *msg;
@@ -385,7 +413,6 @@ extern void clear_end(struct whack_end *e);
 extern size_t whack_get_secret(char *buf, size_t bufsize);
 extern int whack_get_value(char *buf, size_t bufsize);
 
-extern bool lsw_alias_cmp(const char *needle, const char *haystack);
-extern void whack_process(int whackfd, const struct whack_message msg);
+extern bool lsw_alias_cmp(const char *name, const char *aliases);
 
 #endif /* _WHACK_H */

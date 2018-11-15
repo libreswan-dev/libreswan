@@ -7,7 +7,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -38,74 +38,6 @@
 #include <cert.h>
 
 #include "nss_cert_load.h"
-/*
- * load a coded key or certificate file with autodetection
- * of binary DER or base64 PEM ASN.1 formats.
- * On success, returns TRUE, leaving a dynamically allocated blob in *blob.
- * On failure, returns FALSE.
- */
-bool load_coded_file(const char *filename,
-		const char *type, chunk_t *blob)
-{
-	err_t ugh = NULL;
-	FILE *fd = fopen(filename, "r");
-
-	if (fd == NULL) {
-		libreswan_log("  could not open %s file '%s'", type, filename);
-	} else {
-		long sz_ftell;
-		size_t sz_fread;
-
-		fseek(fd, 0, SEEK_END);
-		sz_ftell = ftell(fd);
-
-		/* a cert file larger than 50K seems wrong */
-		if (sz_ftell <= 0 || sz_ftell > 50000) {
-			libreswan_log("  discarded %s file '%s', bad size %lu bytes",
-				type, filename, sz_ftell);
-			fclose(fd);
-			return FALSE;
-		}
-
-		rewind(fd);
-		setchunk(*blob, alloc_bytes(sz_ftell, type), sz_ftell);
-		sz_fread = fread(blob->ptr, 1, blob->len, fd);
-		fclose(fd);
-		if (sz_fread != blob->len) {
-			libreswan_log("  could not read complete certificate-blob from %s file '%s'",
-				type, filename);
-			freeanychunk(*blob);
-			return FALSE;
-		}
-
-		libreswan_log("  loading %s file '%s' (%ld bytes)",
-			type, filename, sz_ftell);
-
-		/* try DER format */
-		if (is_asn1(*blob)) {
-			DBG(DBG_PARSING,
-				DBG_log("  file coded in DER format"));
-			return TRUE;
-		}
-
-		/* try PEM format */
-		ugh = pemtobin(blob);
-
-		if (ugh == NULL) {
-			if (is_asn1(*blob)) {
-				DBG(DBG_PARSING,
-					DBG_log("  file coded in PEM format"));
-				return TRUE;
-			}
-			ugh = "file coded in unknown format, discarded";
-		}
-
-		/* a conversion error has occured */
-		libreswan_log("ERROR: file rejected: %s", ugh);
-		freeanychunk(*blob);
-	}
-	return FALSE;
-}
 
 CERTCertificate *get_cert_by_nickname_from_nss(const char *nickname)
 {
@@ -141,6 +73,17 @@ static SECStatus ckaid_match(CERTCertificate *cert, SECItem *ignore1 UNUSED, voi
 	return SECSuccess;
 }
 
+CERTCertificate *get_cert_by_ckaid_t_from_nss(ckaid_t ckaid)
+{
+	struct ckaid_match_arg ckaid_match_arg = {
+		.cert = NULL,
+		.ckaid = *ckaid.nss,
+	};
+	PK11_TraverseSlotCerts(ckaid_match, &ckaid_match_arg,
+			       lsw_return_nss_password_file_info());
+	return ckaid_match_arg.cert;
+}
+
 CERTCertificate *get_cert_by_ckaid_from_nss(const char *ckaid)
 {
 	if (ckaid == NULL) {
@@ -156,16 +99,15 @@ CERTCertificate *get_cert_by_ckaid_from_nss(const char *ckaid)
 		return NULL;
 	}
 
-	struct ckaid_match_arg ckaid_match_arg = {
-		.cert = NULL,
-		.ckaid = {
-			.type = siBuffer,
-			.data = (void*) buf,
-			.len = buflen,
-		},
+	SECItem ckaid_nss = {
+		.type = siBuffer,
+		.data = (void*) buf,
+		.len = buflen,
 	};
-	PK11_TraverseSlotCerts(ckaid_match, &ckaid_match_arg,
-			       lsw_return_nss_password_file_info());
+	ckaid_t ckaid_buf = {
+		.nss = &ckaid_nss,
+	};
+	CERTCertificate *cert = get_cert_by_ckaid_t_from_nss(ckaid_buf);
 	pfree(buf);
-	return ckaid_match_arg.cert;
+	return cert;
 }

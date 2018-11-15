@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -37,7 +37,7 @@
 
 /*
  *	The following structs are used via pointers in ipsec_alg object to
- *	avoid ipsec_alg.h coupling with freeswan headers, thus simplifying
+ *	avoid ipsec_alg.h coupling with Libreswan headers, thus simplifying
  *	module development
  */
 struct ipsec_sa;
@@ -52,7 +52,7 @@ struct esp;
 	((v) >> 24), (((v) >> 16) & 0xff), (((v) >> 8) & 0xff), ((v) & 0xff)
 /*
  *	Main ipsec_alg objects: "OOPrograming wannabe"
- *	Hierachy (carefully handled with _minimal_ cast'ing):
+ *	Hierarchy (carefully handled with _minimal_ cast'ing):
  *
  *      ipsec_alg+
  *		 +->ipsec_alg_enc  (ixt_alg_type=SADB_EXT_SUPPORTED_ENCRYPT)
@@ -123,7 +123,7 @@ struct ipsec_alg_auth {
 
 /***************************************************************
 *
-*       INTERFACE for module loading,testing, and unloading
+*       INTERFACE for module loading, testing, and unloading
 *
 ***************************************************************/
 /*	-  registration calls   */
@@ -131,7 +131,7 @@ int register_ipsec_alg(struct ipsec_alg *);
 int unregister_ipsec_alg(struct ipsec_alg *);
 /*	-  optional (simple test) for algos     */
 int ipsec_alg_test(unsigned alg_type, unsigned alg_id, int testparm);
-/*	inline wrappers (usefull for type validation */
+/*	inline wrappers (useful for type validation */
 static inline int register_ipsec_alg_enc(struct ipsec_alg_enc *ixt)
 {
 	return register_ipsec_alg((struct ipsec_alg*)ixt);

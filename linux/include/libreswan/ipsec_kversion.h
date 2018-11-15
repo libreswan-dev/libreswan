@@ -6,14 +6,14 @@
  * Copyright (C) 2003 - 2011 Paul Wouters <paul@xelerance.com>
  * Copyright (C) 2008 - 2011 David McCullough <david_mccullough@securecomputing.com>
  * Copyright (C) 2012-2014 David McCullough <david_mccullough@mcafee.com>
- * Copyright (C) 2012-2015 Paul Wouters <pwouters@redhat.com>
+ * Copyright (C) 2012-2017 Paul Wouters <pwouters@redhat.com>
  * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2015 Greg Ungerer <gerg@uclinux.org>
  *
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -286,8 +286,7 @@
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 22) || (RHEL_RELEASE_CODE >= \
-						       RHEL_RELEASE_VERSION(5, \
-									    2))
+	RHEL_RELEASE_VERSION(5, 2))
 /* need to include ip.h early, no longer pick it up in skbuff.h */
 #include <linux/ip.h>
 /* type of sock.sk_stamp changed from timeval to ktime  */
@@ -464,10 +463,12 @@
 #define __ipsec_dev_put(x) __dev_put(x)
 #define ipsec_dev_hold(x) dev_hold(x)
 
-#ifndef late_initcall
-# include <linux/init.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,0)
 # ifndef late_initcall
-#  define       late_initcall(x)        module_init(x)
+#  include <linux/init.h>
+#  ifndef late_initcall
+#   define       late_initcall(x)        module_init(x)
+#  endif
 # endif
 #endif
 
@@ -536,6 +537,18 @@
 # define        HAVE_NETIF_QUEUE
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 6, 0)
+/* just define for old kernels so we can catch it on new kernels */
+# define NETDEV_UNREGISTER_FINAL 0x0011
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,11,0) || \
+    (RHEL_RELEASE_CODE >= RHEL_RELEASE_VERSION(7, 0) && \
+      LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0))
+# define HAVE_NETDEV_INFO
+#endif
+
+
 #ifdef alloc_netdev
 # if LINUX_VERSION_CODE >= KERNEL_VERSION(3,17,0)
 #  define ipsec_alloc_netdev(a,b,c,d) alloc_netdev(a,b,c,d)
@@ -565,6 +578,16 @@ typedef struct ctl_table ctl_table;
 # if defined(CONFIG_USER_NS)
 #  define HAVE_USER_NS
 # endif
+#endif
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4, 6, 0)
+# define HAS_AHASH
+# define HAS_SKCIPHER
+#endif
+
+/* seems to have been backported to as far back as 4.1.4 though */
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4, 11, 9)
+# define HAS_PRIV_DESTRUCTOR
 #endif
 
 #endif /* _LIBRESWAN_KVERSIONS_H */

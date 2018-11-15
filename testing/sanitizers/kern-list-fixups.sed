@@ -1,10 +1,20 @@
+# [  111.628924] -> [ 00.00]
+s/^\[\s\+[0-9]\+.[0-9]\+\] /\[ 00.00] /
+
+# seemingly kernel messages end with ^M?
+/^\[ 00.00] .*/ {
+  / audit:/d
+  / kauditd_printk_skb:/d
+  / Netfilter messages via NETLINK/d
+}
+
 /tracing thread pid = \(.*\)/d
 s/spawn \(.*\) single/spawn PATH single/
 s/Program invoked with \(.*\)\/start.sh/Program invoked with PATH\/start.sh/
 s/Starting UML \(.*\)\/start.*sh/Starting UML PATH\/start.sh/
 s/Kernel command line: .*/Kernel command line:/
 /mconsole .*initialized on .*/d
-s/Calculating module dependencies... .*/Calculating module dependancies/
+s/Calculating module dependencies... .*/Calculating module dependencies/
 s/Loading modules: .*/Loading modules: LIST/
 /modprobe: /d
 s/Calibrating delay loop... .*/Calibrating delay loop... XXXX bogomips/
@@ -102,5 +112,14 @@ s/none on \/usr\/obj type hostfs (ro,.*)/none on \/usr\/obj type hostfs (ro, PAT
 /^.*random: nonblocking pool is initialized$/d
 /^.* alg: No test for .*$/d
 /^.*bytes leftover after parsing attributes in process.*$/d
-s/TTL=63 ID=[0-9]* PROTO/TTL=63 ID=XXXXX PROTO/
+s/TTL=\([0-9]*\) ID=[0-9]* PROTO/TTL=\1 ID=XXXXX PROTO/
+s/ ID=[0-9]* SEQ=/ ID=XXXX SEQ=/g
+s/ LEN=[0-9]* / LEN=XXXX /g
+s/ FLOWLBL=[0-9]* / FLOWLBL=XXXXX /g
 /^.*CPU feature 'AVX registers' is not supported.*$/d
+/^.*hrtimer: interrupt took .*$/d
+/^.*Clocksource tsc unstabl.*$/d
+/^.*audit_printk.*$/d
+/^.*SELinux: unrecognized netlink message.*$/d
+/^.*clocksource.*$/d
+s/ qlen 1000$//
