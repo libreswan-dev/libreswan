@@ -56,7 +56,6 @@ enum kernel_interface {
 	USE_KLIPS = 2,
 	USE_NETKEY= 3,
 	USE_WIN2K = 4,
-	USE_MASTKLIPS = 5,
 	USE_BSDKAME = 6,
 };
 
@@ -230,18 +229,42 @@ enum seccomp_mode {
  * notification_t or v2_notification_t) means fail with that
  * notification.  Since <notification> is a uint16_t, it is limited to
  * 65535 possible values (0 isn't valid).
+ *
+ * tbd? means someone needs to look at the IKEv1/IKEv2 code and figure
+ * it out.
+ *
+ * delete 'if state': delete state is known - the post processing
+ * function function complete_*_state_transition() assumes there is a
+ * message and if it contains a state (*MDP)->ST delete it.  XXX: This
+ * is messed up - a state transition function, which by definition is
+ * operating on a state, should require a state and not the message.
+ *
+ * delete 'maybe?': For IKEv2, delete the IKE_SA_INIT responder state
+ * but only when STF_FAIL+<v2notification>.  IKEv1?  XXX: With no
+ * clear / fast rule, this just creates confusion; perhaps the intent
+ * is for it to delete larval response states, who knows?
+ *
+ * respond 'message?': if the state transition says a message should
+ * be sent (hopefully there is one).
+ *
+ * respond 'maybe?': For instance, with IKEv2 when a responder and
+ * STF_FAIL+<notification>, a notification is sent as the only content
+ * in a response.  XXX: for IKEv2 this is broken: KE responses can't
+ * use it - need to suggest KE; AUTH responses can't use it - need to
+ * send other stuff (but they do breaking auth).
+ *
+ * XXX: suspect STF_DROP can be merged into STF_FAIL.
  */
 
 typedef enum {
-	STF_IGNORE,             /* don't respond */
-	STF_SUSPEND,            /* unfinished -- don't release resources */
-	STF_OK,                 /* success */
-	STF_INTERNAL_ERROR,     /* discard everything, we failed */
-	STF_FATAL,              /* just stop. we can't continue. */
-	STF_DROP,               /* just stop, delete any state, and don't log or respond */
-	STF_FAIL,               /* discard everything, something failed.  notification_t added.
-				 * values STF_FAIL + x are notifications.
-				 */
+	/*                         TRANSITION  DELETE   RESPOND  LOG */
+	STF_IGNORE,             /*     no        no       no     tbd? */
+	STF_SUSPEND,            /*   suspend     no       no     tbd? */
+	STF_OK,                 /*    yes        no     message? tbd? */
+	STF_INTERNAL_ERROR,     /*     no        no      never   tbd? */
+	STF_FATAL,		/*     no      always    never   fail */
+	STF_DROP,		/*     no     if state   never  silent */
+	STF_FAIL,       	/*     no      maybe?    maybe?  fail */
 	STF_ROOF = STF_FAIL + 65536 /* see RFC and above */
 } stf_status;
 
@@ -630,18 +653,20 @@ enum state_kind {
  * responder will see the I flag set in all packets it receives from
  * the original initiator.
  *
- * The original role is used to identify which SPI (cookie) to use in
- * the header and which keying material to use when encrypting and
- * decrypting SK payloads.
- *
  * The IKEv1 equivalent is the phase1 role.  It is identified by the
  * IKEv1 IS_PHASE1_INIT() macro.
  *
  * The values are chosen such that no role has values that overlap.
+ *
+ * XXX: If IKEv2 code correctly uses CHILD_SA and IKE_SA then the, is
+ * probably be redundant - An IKE SA's SA_ROLE should be consistent
+ * with its ORIGINAL_ROLE.  Currently code isn't consistent, so both
+ * are used/defined.
  */
+
 enum original_role {
-	ORIGINAL_INITIATOR = 1, /* IKE_I present */
-	ORIGINAL_RESPONDER = 2, /* IKE_I missing */
+	ORIGINAL_INITIATOR = 5, /* IKE_I present */
+	ORIGINAL_RESPONDER = 6, /* IKE_I missing */
 };
 
 /*
@@ -664,23 +689,33 @@ enum message_role {
 	MESSAGE_RESPONSE = 4, /* MSR_R present */
 };
 
+extern struct keywords message_role_names;
+
 /*
  * The SA role determined by who initiated the SA.
  *
- * For both an IKE and CHILD SA it is determined by who sent the
- * request.
+ * For all IKEv2 exchanges establishing or rekeying an SA it is
+ * determined by who initiated that SA exchange.  During the exchange,
+ * the SA_INITIATOR will always have the R(esponse) bit clear and the
+ * SA_RESPONDER will always have the R(esponse) bit set.
+ *
+ * The IKE SA's role is used to identify which SPI (cookie) to use in
+ * the header by setting or clearing the I(Initiator) flag.
+ *
+ * The IKE or CHILD SA role is used when assigning keying material.
+ *
+ * The IKEv1 equivalent is the phase1 role.  It is identified by the
+ * IKEv1 IS_PHASE1_INIT() macro.
  *
  * The values are chosen such that no role has values that overlap.
- *
- * XXX: If IKEv2 code correctly used CHILD_SA and IKE_SA then
- * ORIGINAL_ROLE, above is probably be redundant - An IKE SA's SA_ROLE
- * should be consistent with its ORIGINAL_ROLE.  Currently code isn't
- * consistent, so both are used/defined.
  */
+
 enum sa_role {
-	SA_INITIATOR = 5,
-	SA_RESPONDER = 6,
+	SA_INITIATOR = 1,
+	SA_RESPONDER = 2,
 };
+
+extern struct keywords sa_role_names;
 
 
 #define PHASE1_INITIATOR_STATES  (LELEM(STATE_MAIN_I1) | \

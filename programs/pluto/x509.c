@@ -65,7 +65,7 @@
 #include "hostpair.h" /* for find_host_pair_connections */
 #include "secrets.h"
 #include "ip_address.h"
-#include "ikev2_send.h"		/* for build_ikev2_critical() */
+#include "ikev2_message.h"	/* for build_ikev2_critical() */
 #include "ike_alg_hash.h"
 
 /* new NSS code */
@@ -86,6 +86,7 @@
 #include <ocsp.h>
 #include "crypt_hash.h"
 #include "crl_queue.h"
+#include "af_info.h"
 
 bool crl_strict = FALSE;
 bool ocsp_strict = FALSE;

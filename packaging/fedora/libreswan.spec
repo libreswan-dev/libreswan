@@ -5,6 +5,7 @@
 %global with_cavstests 1
 # Libreswan config options
 %global libreswan_config \\\
+    USE_KLIPS=false \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
     FIPSPRODUCTCHECK=%{_sysconfdir}/system-fips \\\
@@ -29,7 +30,7 @@
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
 # version is generated in the release script
-Version: 3.27
+Version: IPSECBASEVERSION
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -85,7 +86,7 @@ decrypted by the gateway at the other end of the tunnel.  The resulting
 tunnel is a virtual private network or VPN.
 
 This package contains the daemons and userland tools for setting up
-Libreswan. To build KLIPS, see the kmod-libreswan.spec file.
+Libreswan.
 
 Libreswan also supports IKEv2 (RFC7296) and Secure Labeling
 
@@ -144,10 +145,6 @@ install -d %{buildroot}%{_sbindir}
 install -d %{buildroot}%{_sysconfdir}/sysctl.d
 install -m 0644 packaging/fedora/libreswan-sysctl.conf \
     %{buildroot}%{_sysconfdir}/sysctl.d/50-libreswan.conf
-
-install -d %{buildroot}%{_tmpfilesdir}
-install -m 0644 packaging/fedora/libreswan-tmpfiles.conf  \
-    %{buildroot}%{_tmpfilesdir}/libreswan.conf
 
 mkdir -p %{buildroot}%{_libdir}/fipscheck
 
@@ -208,5 +205,5 @@ export NSS_DISABLE_HW_GCM=1
 %{_libdir}/fipscheck/pluto.hmac
 
 %changelog
-* Sun Oct 07 2018 Team Libreswan <team@libreswan.org> - 3.27-1
+* Sun Oct  7 2018 Team Libreswan <team@libreswan.org> - IPSECBASEVERSION-1
 - Automated build from release tar ball

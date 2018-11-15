@@ -7,6 +7,7 @@
 %global with_dnssec 0
 # Libreswan config options
 %global libreswan_config \\\
+    USE_KLIPS=false \\\
     FINALLIBEXECDIR=%{_libexecdir}/ipsec \\\
     FINALMANDIR=%{_mandir} \\\
     INC_RCDEFAULT=%{_initrddir} \\\
@@ -26,7 +27,7 @@
 
 Name: libreswan
 Summary: IPsec implementation with IKEv1 and IKEv2 keying protocols
-Version: 3.27
+Version: IPSECBASEVERSION
 Release: %{?prever:0.}1%{?prever:.%{prever}}%{?dist}
 License: GPLv2
 Url: https://libreswan.org/
@@ -139,10 +140,6 @@ install -d %{buildroot}%{_sysconfdir}/sysctl.d
 install -m 0644 packaging/rhel/libreswan-sysctl.conf \
     %{buildroot}%{_sysconfdir}/sysctl.d/50-libreswan.conf
 
-install -d %{buildroot}%{_tmpfilesdir}
-install -m 0644 packaging/rhel/libreswan-tmpfiles.conf  \
-    %{buildroot}%{_tmpfilesdir}/libreswan.conf
-
 mkdir -p %{buildroot}%{_libdir}/fipscheck
 install -d %{buildroot}%{_sysconfdir}/prelink.conf.d/
 install -m644 packaging/rhel/libreswan-prelink.conf \
@@ -209,5 +206,5 @@ prelink -u %{_libexecdir}/ipsec/* 2>/dev/null || :
 %{_sysconfdir}/prelink.conf.d/libreswan-fips.conf
 
 %changelog
-* Sun Oct 07 2018 Team Libreswan <team@libreswan.org> - 3.27-1
+* Sun Oct  7 2018 Team Libreswan <team@libreswan.org> - IPSECBASEVERSION-1
 - Automated build from release tar ball

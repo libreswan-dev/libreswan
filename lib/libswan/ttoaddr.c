@@ -14,12 +14,12 @@
  * License for more details.
  *
  */
-#include "internal.h"
-#include "libreswan.h"
 
-#if defined(__CYGWIN32__)
-#define gethostbyname2(X, Y) gethostbyname(X)
-#endif
+#include <string.h>
+
+#include "internal.h"		/* for MALLOC()!! */
+#include "ip_address.h"
+#include "libreswan.h"		/* for ttoul() */
 
 /*
  * Legal ASCII characters in a domain name.  Underscore technically is not,
@@ -178,11 +178,9 @@ static err_t tryname(
 	}
 
 	h = gethostbyname2(cp, af);
-#if !defined(__CYGWIN32__)
 	/* like, windows even has an /etc/networks? */
 	if (h == NULL && af == AF_INET)
 		ne = getnetbyname(cp);
-#endif
 	if (p != namebuf)
 		FREE(p);
 	if (h == NULL && ne == NULL) {

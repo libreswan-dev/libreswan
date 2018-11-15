@@ -51,7 +51,6 @@
 #include "demux.h"      /* needs packet.h */
 #include "kernel.h"     /* needs connections.h */
 #include "log.h"
-#include "cookie.h"
 #include "server.h"
 #include "spdb.h"
 #include "timer.h"
@@ -150,7 +149,8 @@ notification_t accept_KE(chunk_t *dest, const char *val_name,
 		/* XXX Could send notification back */
 		return INVALID_KEY_INFORMATION;
 	}
-	clonereplacechunk(*dest, pbs->cur, pbs_left(pbs), val_name);
+	free_chunk_contents(dest); /* XXX: ever needed? */
+	*dest = clone_in_pbs_left_as_chunk(pbs, val_name);
 	DBG_cond_dump_chunk(DBG_CRYPT, "DH public value received:\n", *dest);
 	return NOTHING_WRONG;
 }

@@ -50,7 +50,11 @@ OBJS =
 
 OBJS += send.o
 OBJS += ikev1_send.o
+
 OBJS += ikev2_send.o
+OBJS += ikev2_message.o
+OBJS += ikev2_cookie.o
+OBJS += ikev2_ts.o
 
 OBJS += state_db.o
 OBJS += show.o
@@ -65,8 +69,8 @@ ifeq ($(USE_GLIBC_KERN_FLIP_HEADERS),true)
 CFLAGS+=-DGLIBC_KERN_FLIP_HEADERS
 endif
 
-# where to find klips headers and Libreswan headers
-HDRDIRS +=-I${LIBRESWANSRCDIR}/include -I$(LIBRESWANSRCDIR)/lib/libcrypto -I$(KLIPSINC)
+# where to find libreswan headers
+HDRDIRS +=-I${LIBRESWANSRCDIR}/include -I$(LIBRESWANSRCDIR)/lib/libcrypto
 
 ifeq ($(USE_PFKEYv2),true)
 OBJS += kernel_pfkey.o
@@ -78,10 +82,6 @@ endif
 
 ifeq ($(USE_KLIPS),true)
 OBJS += kernel_klips.o
-endif
-
-ifeq ($(USE_MAST),true)
-OBJS += kernel_mast.o
 endif
 
 ifeq ($(USE_BSDKAME),true)
@@ -199,7 +199,8 @@ OBJS += ctr_test_vectors.o
 OBJS += gcm_test_vectors.o
 OBJS += prf_test_vectors.o
 OBJS += test_buffer.o
-OBJS += pending.o cookie.o crypto.o defs.o
+OBJS += pending.o crypto.o defs.o
+OBJS += ike_spi.o
 OBJS += foodgroups.o log.o state.o plutomain.o plutoalg.o server.o
 OBJS += peerlog.o
 OBJS += hash_table.o list_entry.o

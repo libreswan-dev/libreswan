@@ -88,6 +88,7 @@
 #include "crypto.h"
 #include "kernel_netlink.h"
 #include "ip_address.h"
+#include "af_info.h"
 #include "key.h" /* for SECKEY_DestroyPublicKey */
 
 struct connection *connections = NULL;
@@ -356,13 +357,15 @@ void delete_connection(struct connection *c, bool relations)
 		alg_info_delref(&c->alg_info_ike->ai);
 		c->alg_info_ike = NULL;
 	}
-	free_ikev2_proposals(&c->ike_proposals);
+	free_ikev2_proposals(&c->v2_ike_proposals);
 
 	if (c->alg_info_esp != NULL) {
 		alg_info_delref(&c->alg_info_esp->ai);
 		c->alg_info_esp = NULL;
 	}
-	free_ikev2_proposals(&c->esp_or_ah_proposals);
+	free_ikev2_proposals(&c->v2_ike_auth_child_proposals);
+	free_ikev2_proposals(&c->v2_create_child_proposals);
+	c->v2_create_child_proposals_default_dh = NULL; /* static pointer */
 
 	pfree(c);
 }
@@ -898,7 +901,6 @@ static bool extract_end(struct end *dst, const struct whack_end *src,
 		} else if (!streq(src->ca, "%any")) {
 			err_t ugh;
 
-			dst->ca.ptr = temporary_cyclic_buffer();
 			ugh = atodn(src->ca, &dst->ca);
 			if (ugh != NULL) {
 				libreswan_log(
@@ -2651,12 +2653,6 @@ struct connection *route_owner(struct connection *c,
 	for (struct connection *d = connections; d != NULL; d = d->ac_next) {
 		if (!oriented(*d))
 			continue;
-#ifdef KLIPS_MAST
-		/* in mast mode we must also delete the iptables rule */
-		if (kern_interface == USE_MASTKLIPS &&
-		    compatible_overlapping_connections(c, d))
-			continue;
-#endif
 
 		/*
 		 * allow policies different by mark/mask
@@ -3458,7 +3454,7 @@ struct connection *refine_host_connection(const struct state *st,
 
 		if (wcpip) {
 			/* been around twice already */
-			DBG(DBG_CONTROL, DBG_log("returning since no better match then original best_found"));
+			DBG(DBG_CONTROL, DBG_log("returning since no better match than original best_found"));
 			return best_found;
 		}
 

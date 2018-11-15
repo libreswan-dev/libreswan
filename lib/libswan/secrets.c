@@ -467,11 +467,8 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 						same = TRUE;
 						break;
 					case PKK_PSK:
-						same = s->pks.u.preshared_secret.len ==
-						       best->pks.u.preshared_secret.len &&
-						       memeq(s->pks.u.preshared_secret.ptr,
-							     best->pks.u.preshared_secret.ptr,
-							     s->pks.u.preshared_secret.len);
+						same = chunk_eq(s->pks.u.preshared_secret,
+							best->pks.u.preshared_secret);
 						break;
 					case PKK_RSA:
 						/*
@@ -498,11 +495,8 @@ struct secret *lsw_find_secret_by_id(struct secret *secrets,
 						 */
 						break;
 					case PKK_PPK:
-						same = s->pks.ppk.len ==
-						       best->pks.ppk.len &&
-						       memeq(s->pks.ppk.ptr,
-							     best->pks.ppk.ptr,
-							     s->pks.ppk.len);
+						same = chunk_eq(s->pks.ppk,
+							best->pks.ppk);
 						break;
 					default:
 						bad_case(kind);
@@ -698,11 +692,17 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 		size_t len = flp->cur - flp->tok - 2;
 
 		clonetochunk(*ppk_id, flp->tok + 1, len, "PPK ID");
-		(void) shift();
 	} else {
 		ugh = "No quotation marks found. PPK ID should be in quotation marks";
 		return ugh;
 	}
+
+	if (!shift()) {
+		ugh = "No PPK found. PPK should be specified after PPK ID";
+		freeanychunk(*ppk_id);
+		return ugh;
+	}
+
 	if (*flp->tok == '"' || *flp->tok == '\'') {
 		size_t len = flp->cur - flp->tok - 2;
 
@@ -726,6 +726,7 @@ static err_t lsw_process_ppk_static_secret(chunk_t *ppk, chunk_t *ppk_id)
 			/* ttodata didn't like PPK data */
 			ugh = builddiag("PPK data malformed (%s): %s", ugh,
 					flp->tok);
+			freeanychunk(*ppk_id);
 		} else {
 			clonetochunk(*ppk, buf, sz, "PPK");
 			(void) shift();
@@ -744,7 +745,7 @@ struct secret *lsw_get_ppk_by_id(struct secret *s, chunk_t ppk_id)
 {
 	while (s != NULL) {
 		struct private_key_stuff pks = s->pks;
-		if (pks.kind == PKK_PPK && same_chunk(pks.ppk_id, ppk_id))
+		if (pks.kind == PKK_PPK && chunk_eq(pks.ppk_id, ppk_id))
 			return s;
 		s = s->next;
 	}
@@ -955,6 +956,16 @@ static void process_secret(struct secret **psecrets,
 	if (ugh != NULL) {
 		loglog(RC_LOG_SERIOUS, "\"%s\" line %d: %s",
 			flp->filename, flp->lino, ugh);
+		/* free id's that should have been allocated */
+		if (s->ids != NULL) {
+			struct id_list *i, *ni;
+			for (i = s->ids; i != NULL; i = ni) {
+				ni = i->next;	/* grab before freeing i */
+				free_id_content(&i->id);
+				pfree(i);
+			}
+		}
+		/* finally free s */
 		pfree(s);
 	} else if (flushline("expected record boundary in key")) {
 		/* gauntlet has been run: install new secret */
@@ -1294,7 +1305,7 @@ bool same_RSA_public_key(const struct RSA_public_key *a,
 	 * difference.
 	 */
 	DBG(DBG_CRYPT,
-	    if (a->k != b->k && same_chunk(a->e, b->e)) {
+	    if (a->k != b->k && chunk_eq(a->e, b->e)) {
 		    DBG_log("XXX: different modulus k (%u vs %u) modulus (%zu vs %zu) caused a mismatch",
 			    a->k, b->k, a->n.len, b->n.len);
 	    });
@@ -1304,17 +1315,17 @@ bool same_RSA_public_key(const struct RSA_public_key *a,
 		);
 	DBG(DBG_CRYPT,
 	    DBG_log("n did %smatch",
-		    same_chunk(a->n, b->n) ? "" : "NOT ");
+		    chunk_eq(a->n, b->n) ? "" : "NOT ");
 		);
 	DBG(DBG_CRYPT,
 		DBG_log("e did %smatch",
-			same_chunk(a->e, b->e) ? "" : "NOT ");
+			chunk_eq(a->e, b->e) ? "" : "NOT ");
 		);
 
 	return a == b ||
 		(a->k == b->k &&
-		 same_chunk(a->n, b->n) &&
-		 same_chunk(a->e, b->e));
+		 chunk_eq(a->n, b->n) &&
+		 chunk_eq(a->e, b->e));
 }
 
 void install_public_key(struct pubkey *pk, struct pubkey_list **head)

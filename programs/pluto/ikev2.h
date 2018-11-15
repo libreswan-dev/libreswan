@@ -10,6 +10,7 @@
 
 #include "fd.h"
 
+struct pluto_crypto_req;
 typedef stf_status crypto_transition_fn(struct state *st, struct msg_digest *md,
 					struct pluto_crypto_req *r);
 
@@ -30,7 +31,8 @@ extern void ikev2_parent_outI1(fd_t whack_sock,
 
 extern void log_ipsec_sa_established(const char *m, const struct state *st);
 
-extern void complete_v2_state_transition(struct msg_digest **mdp,
+extern void complete_v2_state_transition(struct state *st,
+					 struct msg_digest **mdp,
 					 stf_status result);
 
 extern stf_status ikev2_send_livenss_probe(struct state *st);
@@ -97,11 +99,27 @@ void DBG_log_ikev2_proposal(const char *prefix, const struct ikev2_proposal *pro
 void free_ikev2_proposal(struct ikev2_proposal **proposal);
 void free_ikev2_proposals(struct ikev2_proposals **proposals);
 
-void ikev2_need_ike_proposals(struct connection *c, const char *why);
+/*
+ * On-demand, generate proposals for either the IKE SA or the CHILD
+ * SA.
+ *
+ * For CHILD SAs, two different proposal suites are used: during the
+ * IKE_AUTH exchange a stripped down proposal that excludes DH; and
+ * during the CREATE_CHILD_SA exchange DH a mashed up proposal that
+ * can include the IKE SA's latest DH.
+ *
+ * This is done on-demand as, only at the point where the IKE or CHILD
+ * SA is being instantiated, is it clear what proposals are needed.
+ * For instance, when a CHILD SA shares an existing IKE SA, the CHILD
+ * won't need IKE proposals but will need the IKE SA's DH.
+ *
+ * XXX: Should the CREATE CHILD SA proposals be stored in the state?
+ */
 
-void ikev2_need_esp_or_ah_proposals(struct connection *c,
-				    const char *why,
-				    const struct oakley_group_desc *default_dh);
+struct ikev2_proposals *get_v2_ike_proposals(struct connection *c, const char *why);
+struct ikev2_proposals *get_v2_ike_auth_child_proposals(struct connection *c, const char *why);
+struct ikev2_proposals *get_v2_create_child_proposals(struct connection *c, const char *why,
+						      const struct oakley_group_desc *default_dh);
 
 bool ikev2_emit_sa_proposal(pb_stream *pbs,
 			    const struct ikev2_proposal *proposal,
@@ -180,57 +198,12 @@ extern stf_status ikev2_verify_psk_auth(enum keyword_authby authby,
 
 extern void ikev2_derive_child_keys(struct child_sa *child);
 
-extern struct traffic_selector ikev2_end_to_ts(const struct end *e);
-
-extern int ikev2_evaluate_connection_fit(const struct connection *d,
-					 const struct spd_route *sr,
-					 enum original_role role,
-					 const struct traffic_selector *tsi,
-					 const struct traffic_selector *tsr,
-					 int tsi_n,
-					 int tsr_n);
-
-extern int ikev2_evaluate_connection_port_fit(const struct connection *d,
-					      const struct spd_route *sr,
-					      enum original_role role,
-					      const struct traffic_selector *tsi,
-					      const struct traffic_selector *tsr,
-					      int tsi_n,
-					      int tsr_n,
-					      int *best_tsi_i,
-					      int *best_tsr_i);
-
-extern stf_status ikev2_emit_ts_payloads(const struct child_sa *cst,
-					 pb_stream *outpbs,
-					 enum sa_role role,
-					 const struct connection *c0,
-					 const enum next_payload_types_ikev2 np);
-
-extern int ikev2_parse_ts(struct payload_digest *ts_pd,
-			  struct traffic_selector *array,
-			  unsigned int array_roof);
-
-extern int ikev2_evaluate_connection_protocol_fit(const struct connection *d,
-						  const struct spd_route *sr,
-						  enum original_role role,
-						  const struct traffic_selector *tsi,
-						  const struct traffic_selector *tsr,
-						  int tsi_n,
-						  int tsr_n,
-						  int *best_tsi_i,
-						  int *best_tsr_i);
-
 extern stf_status ikev2_child_sa_respond(struct msg_digest *md,
 					 pb_stream *outpbs,
 					 enum isakmp_xchg_types isa_xchg);
 
-extern stf_status ikev2_resp_accept_child_ts(const struct msg_digest *md,
-					     struct state **ret_cst,
-					     enum original_role role, enum
-					     isakmp_xchg_types isa_xchg);
-
-extern void ikev2_update_msgid_counters(struct msg_digest *md);
-extern void ikev2_print_ts(const struct traffic_selector *ts);
+void v2_msgid_restart_init_request(struct state *st, struct msg_digest *md);
+void v2_msgid_update_counters(struct state *st, struct msg_digest *md);
 
 extern deltatime_t ikev2_replace_delay(struct state *st,
 				       enum event_type *pkind);
@@ -239,8 +212,6 @@ stf_status ikev2_send_cp(struct state *st, enum next_payload_types_ikev2 np,
 		pb_stream *outpbs);
 
 bool ikev2_parse_cp_r_body(struct payload_digest *cp_pd, struct state *st);
-
-bool ikev2_decrypt_msg(struct state *st, struct msg_digest *md);
 
 struct ikev2_payload_errors {
 	bool bad;
@@ -285,7 +256,6 @@ struct state_v2_microcode {
 
 	const enum event_type timeout_event;
 	ikev2_state_transition_fn *const processor;
-	crypto_transition_fn *const crypto_end;
 };
 
 void ikev2_copy_cookie_from_sa(struct ikev2_proposal *accepted_ike_proposal,
@@ -302,6 +272,7 @@ extern stf_status ikev2_process_child_sa_pl(struct msg_digest *md,
 
 extern bool emit_v2KE(chunk_t *g, const struct oakley_group_desc *group, pb_stream *outs);
 
+enum message_role v2_msg_role(const struct msg_digest *md);
 extern bool is_msg_response(const struct msg_digest *md);
 extern bool is_msg_request(const struct msg_digest *md);
 
@@ -314,3 +285,6 @@ extern void ikev2_record_deladdr(struct state *st, void *arg_ip);
 extern void ikev2_addr_change(struct state *st);
 
 void lswlog_v2_stf_status(struct lswlog *buf, unsigned ret);
+
+struct state *v2_child_sa_responder_with_msgid(struct ike_sa *ike, msgid_t st_msgid);
+struct state *v2_child_sa_initiator_with_msgid(struct ike_sa *ike, msgid_t st_msgid);
