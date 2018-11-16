@@ -41,7 +41,6 @@ OBJS += x509dn.o asn1.o oid.o
 OBJS += constants.o \
 	alloc.o diag.o \
 	id.o initaddr.o initsaid.o initsubnet.o \
-	iprange.o \
         keyblobtoid.o \
 	lex.o \
 	lswconf.o \
@@ -49,7 +48,7 @@ OBJS += constants.o \
 	rangetosubnet.o sameaddr.o \
 	secrets.o subnettot.o \
 	subnettypeof.o ttoaddr.o ttodata.o ttoprotoport.o \
-	ttorange.o ttosa.o ttosubnet.o ttoul.o \
+	ttosa.o ttosubnet.o ttoul.o \
 	secitem_chunk.o \
 	base64_pubkey.o \
 	lswnss.o \
@@ -60,12 +59,13 @@ ifeq ($(USE_NETKEY),true)
 OBJS += addr_lookup.o
 endif
 
+OBJS += log_ip.o
+OBJS += af_info.o
 OBJS += fd.o
 OBJS += kernel_alg.o
 OBJS += kernel_sadb.o
+OBJS += role.o
 
-# These get pulled in from the klips kernel code.
-VPATH += ${KLIPSSRCDIR}
 OBJS += addrtot.o
 OBJS += addrtypeof.o
 OBJS += anyaddr.o
@@ -82,8 +82,11 @@ OBJS += chunk.o
 OBJS += shunk.o
 
 OBJS += ip_address.o
+OBJS += ip_range.o
+OBJS += ip_subnet.o
 
 OBJS += lmod.o
+OBJS += lset.o
 OBJS += deltatime.o
 OBJS += realtime.o
 OBJS += monotime.o
@@ -92,6 +95,7 @@ OBJS += debug.o
 OBJS += impair.o
 OBJS += keywords.o
 
+OBJS += dbg.o
 OBJS += libreswan_DBG_dump.o
 OBJS += libreswan_DBG_log.o
 OBJS += libreswan_exit_log_errno.o
@@ -191,7 +195,7 @@ OBJS += pfkey_v2_debug.o
 endif
 
 # Original flags; this is a mess.
-CFLAGS+=${PORTINCLUDE} -I. -I${KLIPSINC}
+CFLAGS+=${PORTINCLUDE} -I.
 CFLAGS+=-I${LIBRESWANSRCDIR}
 CFLAGS+= $(NSSFLAGS)
 CFLAGS+=-I${LIBRESWANSRCDIR}/include ${PORTINCLUDE}
@@ -199,19 +203,15 @@ CFLAGS+=-I${LIBRESWANSRCDIR}/include ${PORTINCLUDE}
 CFLAGS+=$(USERLAND_CFLAGS)
 CFLAGS+=${CROSSFLAGS}
 
-ifeq ($(NSS_REQ_AVA_COPY),true)
-CFLAGS+=-DNSS_REQ_AVA_COPY
-endif
-
 OBJS += $(abs_builddir)/version.o
 
-include $(top_srcdir)/mk/library.mk
-
 # build version.c using version number from Makefile.ver
-$(abs_builddir)/version.c: ${KLIPSSRCDIR}/version.in.c $(top_srcdir)/Makefile.ver
+$(abs_builddir)/version.c: $(srcdir)/version.in.c $(top_srcdir)/Makefile.ver
 	rm -f $@.tmp
 	sed -e '/"/s/@IPSECVERSION@/$(IPSECVERSION)/' \
 	    -e '/"/s/@IPSECVIDVERSION@/$(IPSECVIDVERSION)/' \
-	    ${KLIPSSRCDIR}/version.in.c \
+	    $(srcdir)/version.in.c \
 	    > $@.tmp
 	mv $@.tmp $@
+
+include $(top_srcdir)/mk/library.mk

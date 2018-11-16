@@ -18,7 +18,7 @@ road #
 road #
  ip6tables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 road #
- # confirm with a ping
+ # confirm clear text does not get through
 road #
  ping6 -n -c 4 2001:db8:1:2::23
 PING 2001:db8:1:2::23(2001:db8:1:2::23) 56 data bytes
@@ -50,6 +50,8 @@ road #
 000 "v6-tunnel-east-road":   our idtype: ID_FQDN; our id=@road; their idtype: ID_FQDN; their id=@east
 000 "v6-tunnel-east-road":   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
 000 "v6-tunnel-east-road":   newest ISAKMP SA: #0; newest IPsec SA: #0;
+road #
+ ipsec whack --impair suppress-retransmits
 road #
  echo "initdone"
 initdone

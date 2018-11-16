@@ -67,7 +67,7 @@
 #include "ikev2.h"
 #include "crypt_hash.h"
 #include "ip_address.h"
-#include "cookie.h"
+#include "ike_spi.h"
 #include "crypto.h"
 #include "vendor.h"
 #include "send.h"
@@ -743,7 +743,7 @@ int nat_traversal_espinudp_socket(int sk, const char *fam)
 #endif
 
 #if defined(KLIPS)
-	if (kern_interface == USE_KLIPS || kern_interface == USE_MASTKLIPS) {
+	if (kern_interface == USE_KLIPS) {
 		struct ifreq ifr;
 		int *fdp = (int *) &ifr.ifr_data;
 		DBG(DBG_NATT, DBG_log("NAT-Traversal: Trying old ioctl style NAT-T"));

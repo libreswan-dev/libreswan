@@ -77,6 +77,7 @@
 #include "ip_address.h"
 #include "send.h"		/* for send without recording */
 #include "ikev1_send.h"
+#include "af_info.h"
 
 /* forward declarations */
 static stf_status xauth_client_ackstatus(struct state *st,
@@ -1059,17 +1060,12 @@ static bool do_file_authentication(struct state *st, const char *name,
 		    (connectionname == NULL || streq(connectionname, connname)))
 		{
 			const char *cp;
-#if defined(__CYGWIN32__)
-			/* password is in the clear! */
-			cp = password;
-#else
 			/*
 			 * keep the passwords using whatever utilities
 			 * we have NOTE: crypt() may not be
 			 * thread-safe
 			 */
 			cp = crypt(password, passwdhash);
-#endif
 			win = cp != NULL && streq(cp, passwdhash);
 
 			DBG(DBG_PRIVATE,
@@ -2163,11 +2159,11 @@ static stf_status xauth_client_resp(struct state *st,
 							if (cptr != NULL)
 								*cptr = '\0';
 						}
-						clonereplacechunk(
-							st->st_xauth_password,
-							xauth_password,
-							strlen(xauth_password),
-							"XAUTH password");
+						/* see above */
+						pexpect(st->st_xauth_password.ptr == NULL);
+						st->st_xauth_password = clone_bytes_as_chunk(xauth_password,
+											     strlen(xauth_password),
+											     "XAUTH password");
 						discard_pw = TRUE;
 					}
 

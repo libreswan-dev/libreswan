@@ -35,6 +35,7 @@
 #include "constants.h"
 #include "enum_names.h"
 #include "lswlog.h"
+#include "ip_said.h"		/* for SPI_PASS et.al. */
 
 const char *bool_str(bool b)
 {
@@ -2000,52 +2001,6 @@ enum_names ikev2_trans_attr_descs = {
 	NULL
 };
 
-static ip_address ipv4_any, ipv6_any;
-static ip_subnet ipv4_wildcard, ipv6_wildcard;
-static ip_subnet ipv4_all, ipv6_all;
-
-const struct af_info af_inet4_info = {
-	AF_INET,
-	"AF_INET",
-	sizeof(struct in_addr),
-	sizeof(struct sockaddr_in),
-	32,
-	ID_IPV4_ADDR, ID_IPV4_ADDR_SUBNET, ID_IPV4_ADDR_RANGE,
-	&ipv4_any, &ipv4_wildcard, &ipv4_all,
-};
-
-const struct af_info af_inet6_info = {
-	AF_INET6,
-	"AF_INET6",
-	sizeof(struct in6_addr),
-	sizeof(struct sockaddr_in6),
-	128,
-	ID_IPV6_ADDR, ID_IPV6_ADDR_SUBNET, ID_IPV6_ADDR_RANGE,
-	&ipv6_any, &ipv6_wildcard, &ipv6_all,
-};
-
-const struct af_info *aftoinfo(int af)
-{
-	switch (af) {
-	case AF_INET:
-		return &af_inet4_info;
-
-	case AF_INET6:
-		return &af_inet6_info;
-
-	default:
-		return NULL;
-	}
-}
-
-bool subnetisnone(const ip_subnet *sn)
-{
-	ip_address base;
-
-	networkof(sn, &base);
-	return isanyaddr(&base) && subnetishost(sn);
-}
-
 static const char *const pkk_name[] = {
 	"PKK_PSK",
 	"PKK_RSA",
@@ -2380,86 +2335,6 @@ size_t lswlog_enum_enum_short(struct lswlog *buf, enum_enum_names *een,
 	return lswlog_enum_short(buf, en, val);
 }
 
-/*
- * construct a string to name the bits on in a set
- *
- * Result of bitnamesof may be in STATIC buffer -- NOT RE-ENTRANT!
- * Note: prettypolicy depends on internal details of bitnamesofb.
- * binamesofb is re-entrant since the caller provides the buffer.
- */
-const char *bitnamesofb(const char *const table[], lset_t val,
-			char *b, size_t blen)
-{
-	char *const roof = b + blen;
-	char *p = b;
-	lset_t bit;
-	const char *const *tp;
-
-	passert(blen != 0); /* need room for NUL */
-
-	/* if nothing gets filled in, default to "none" rather than "" */
-	(void) jam_str(b, blen, "none");
-
-	for (tp = table, bit = 01; val != 0; bit <<= 1) {
-		if (val & bit) {
-			const char *n = *tp;
-
-			if (p != b)
-				p = jam_str(p, (size_t)(roof - p), "+");
-
-			if (n == NULL || *n == '\0') {
-				/*
-				 * No name for this bit, so use hex.
-				 * if snprintf returns a different value from
-				 * strlen, truncation happened
-				 */
-				(void)snprintf(p, (size_t)(roof - p),
-					"0x%" PRIxLSET,
-					bit);
-				p += strlen(p);
-			} else {
-				p = jam_str(p, (size_t)(roof - p), n);
-			}
-			val -= bit;
-		}
-		/*
-		 * Move on in the table, but not past end.
-		 * This is a bit of a trick: while we are at stuck the end,
-		 * the loop will print out the remaining bits in hex.
-		 */
-		if (*tp != NULL)
-			tp++;
-	}
-	return b;
-}
-
-/*
- * NOT RE-ENTRANT!
- */
-const char *bitnamesof(const char *const table[], lset_t val)
-{
-	static char bitnamesbuf[8192]; /* I hope that it is big enough! */
-
-	return bitnamesofb(table, val, bitnamesbuf, sizeof(bitnamesbuf));
-}
-
-/* test a set by seeing if all bits have names */
-bool testset(const char *const table[], lset_t val)
-{
-	lset_t bit;
-	const char *const *tp;
-
-	for (tp = table, bit = 01; val != 0; bit <<= 1, tp++) {
-		const char *n = *tp;
-
-		if (n == NULL || ((val & bit) && *n == '\0'))
-			return FALSE;
-
-		val &= ~bit;
-	}
-	return TRUE;
-}
-
 const char sparse_end[] = "end of sparse names";
 
 /* look up enum names in a sparse_names */
@@ -2564,15 +2439,6 @@ void check_enum_names(enum_names *checklist[], size_t tl)
 
 void init_constants(void)
 {
-	happy(anyaddr(AF_INET, &ipv4_any));
-	happy(anyaddr(AF_INET6, &ipv6_any));
-
-	happy(addrtosubnet(&ipv4_any, &ipv4_wildcard));
-	happy(addrtosubnet(&ipv6_any, &ipv6_wildcard));
-
-	happy(initsubnet(&ipv4_any, 0, '0', &ipv4_all));
-	happy(initsubnet(&ipv6_any, 0, '0', &ipv6_all));
-
 	check_enum_names(ARRAY_REF(en_checklist));
 
 	/* check v2_transform_ID_enums, the only enum_enum_names */

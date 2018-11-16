@@ -48,7 +48,6 @@
 #include "demux.h"      /* needs packet.h */
 #include "kernel.h"     /* needs connections.h */
 #include "log.h"
-#include "cookie.h"
 #include "server.h"
 #include "spdb.h"
 #include "timer.h"
@@ -81,6 +80,7 @@
 #include "pluto_x509.h"
 #include "alg_info.h"
 #include "ip_address.h"
+#include "af_info.h"
 
 #include <blapit.h>
 
@@ -677,16 +677,18 @@ static size_t quick_mode_hash12(u_char *dest, const u_char *start,
 	DBG_dump("hash key", st->st_skeyid_a.ptr, st->st_skeyid_a.len);
 #endif
 	hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
-	hmac_update(&ctx, (const void *) msgid, sizeof(msgid_t));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(*msgid);
+	hmac_update(&ctx, (const void *)&raw_msgid, sizeof(raw_msgid));
 	if (hash2)
 		hmac_update_chunk(&ctx, st->st_ni); /* include Ni_b in the hash */
 	hmac_update(&ctx, start, roof - start);
 	hmac_final(dest, &ctx);
 
 	DBG(DBG_CRYPT, {
-		    DBG_log("HASH(%d) computed:", hash2 + 1);
-		    DBG_dump("", dest, ctx.hmac_digest_len);
-	    });
+			DBG_log("HASH(%d) computed:", hash2 + 1);
+			DBG_dump("", dest, ctx.hmac_digest_len);
+		});
 	return ctx.hmac_digest_len;
 
 #   undef hmac_update
@@ -704,7 +706,9 @@ static size_t quick_mode_hash3(u_char *dest, struct state *st)
 
 	hmac_init(&ctx, st->st_oakley.ta_prf, st->st_skeyid_a_nss);
 	hmac_update(&ctx, (const u_char *)"\0", 1);
-	hmac_update(&ctx, (u_char *) &st->st_msgid, sizeof(st->st_msgid));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(st->st_msgid);
+	hmac_update(&ctx, (const void*)&raw_msgid, sizeof(raw_msgid));
 	hmac_update_chunk(&ctx, st->st_ni);
 	hmac_update_chunk(&ctx, st->st_nr);
 	hmac_final(dest, &ctx);
@@ -733,7 +737,9 @@ void init_phase2_iv(struct state *st, const msgid_t *msgid)
 	struct crypt_hash *ctx = crypt_hash_init(h, "IV", DBG_CRYPT);
 	crypt_hash_digest_bytes(ctx, "PH1_IV", st->st_ph1_iv, st->st_ph1_iv_len);
 	passert(*msgid != 0);
-	crypt_hash_digest_bytes(ctx, "MSGID", (const u_char *)msgid, sizeof(*msgid));
+	passert(sizeof(msgid_t) == sizeof(uint32_t));
+	msgid_t raw_msgid = htonl(*msgid);
+	crypt_hash_digest_bytes(ctx, "MSGID", (void*) &raw_msgid, sizeof(raw_msgid));
 	crypt_hash_final_bytes(&ctx, st->st_new_iv, st->st_new_iv_len);
 
 	DBG_cond_dump(DBG_CRYPT, "computed Phase 2 IV:",
@@ -925,15 +931,15 @@ static stf_status quick_outI1_tail(struct pluto_crypto_req *r,
 	 * POLICY_COMPRESS is considered iff we can do IPcomp.
 	 */
 	{
-		lset_t pm = POLICY_ENCRYPT | POLICY_AUTHENTICATE;
-
-		if (can_do_IPcomp)
-			pm |= POLICY_COMPRESS;
+		lset_t pm = st->st_policy & (POLICY_ENCRYPT |
+					     POLICY_AUTHENTICATE |
+					     can_do_IPcomp ? POLICY_COMPRESS : 0);
+		DBGF(DBG_CONTROL, "emitting quick defaults using policy %s",
+		     bitnamesof(sa_policy_bit_names, pm));
 
 		if (!ikev1_out_sa(&rbody,
-			    &ipsec_sadb[(st->st_policy &
-					 pm) >> POLICY_IPSEC_SHIFT],
-			    st, FALSE, FALSE, ISAKMP_NEXT_NONCE)) {
+				  &ipsec_sadb[pm >> POLICY_IPSEC_SHIFT],
+				  st, FALSE, FALSE, ISAKMP_NEXT_NONCE)) {
 			reset_cur_state();
 			return STF_INTERNAL_ERROR;
 		}
@@ -1532,7 +1538,7 @@ static void quick_inI1_outR1_continue2(struct state *st,
 }
 
 /*
- * Spit out the IPSec ID payload we got.
+ * Spit out the IPsec ID payload we got.
  *
  * We go to some trouble to use out_struct so NP
  * for adjacent packets is handled correctly.

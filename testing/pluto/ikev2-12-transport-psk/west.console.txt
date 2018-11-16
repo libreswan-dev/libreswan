@@ -11,7 +11,7 @@ west #
 west #
  iptables -I INPUT -m policy --dir in --pol ipsec -j ACCEPT
 west #
- # confirm with a ping
+ # confirm clear text does not get through
 west #
  ping -n -c 4 -I 192.1.2.45 192.1.2.23
 PING 192.1.2.23 (192.1.2.23) from 192.1.2.45 : 56(84) bytes of data.
@@ -47,6 +47,8 @@ west #
 000 "ipv4-psk-ikev2-transport":   our idtype: ID_FQDN; our id=@west; their idtype: ID_FQDN; their id=@east
 000 "ipv4-psk-ikev2-transport":   dpd: action:hold; delay:0; timeout:0; nat-t: encaps:auto; nat_keepalive:yes; ikev1_natt:both
 000 "ipv4-psk-ikev2-transport":   newest ISAKMP SA: #0; newest IPsec SA: #0;
+west #
+ ipsec whack --impair suppress-retransmits
 west #
  echo "initdone"
 initdone
