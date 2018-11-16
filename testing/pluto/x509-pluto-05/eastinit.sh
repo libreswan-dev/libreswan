@@ -1,21 +1,7 @@
-#!/bin/sh
-
-: ==== start ====
-
-TESTNAME=x509-pluto-05
-source /testing/pluto/bin/eastlocal.sh
-
-rm /tmp/$TESTNAME/ipsec.d/crls/nic.crl
-
-iptables -A INPUT -i eth1 -s 192.0.3.0/24 -d 0.0.0.0/0 -j DROP
-
-arp -s 192.0.2.1 10:00:00:dc:bc:01
-
+/testing/guestbin/swan-prep --x509
+certutil -d sql:/etc/ipsec.d -D -n "Libreswan test CA for mainca - Libreswan"
 ipsec start
 /testing/pluto/bin/wait-until-pluto-started
-
-ipsec auto --add north-east-x509-pluto-02
-
-echo done
-
-
+ipsec auto --add westnet-eastnet-x509
+ipsec auto --status | grep westnet-eastnet-x509
+echo "initdone"

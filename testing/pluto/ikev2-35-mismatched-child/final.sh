@@ -1,8 +1,10 @@
 # this should not match anything
 grep v2N_INVALID_MESSAGE_ID /tmp/pluto.log
+# this shows we returned the error in IKE_AUTH
+grep "exchange type:" /tmp/pluto.log
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
-if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
+../bin/check-for-core.sh
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

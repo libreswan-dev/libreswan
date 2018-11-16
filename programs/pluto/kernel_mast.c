@@ -2,19 +2,18 @@
  * Copyright (C) 1997 Angelos D. Keromytis.
  * Copyright (C) 1998-2002  D. Hugh Redelmeier.
  * Copyright (C) 2003 Herbert Xu.
+ * Copyright (C) 2017 Richard Guy Briggs <rgb@tricolour.ca>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * for more details.
  */
-
-#ifdef KLIPS
 
 #include <errno.h>
 #include <fcntl.h>
@@ -54,10 +53,6 @@
 
 static int next_free_mast_device = -1;
 int useful_mastno = -1;
-
-#ifndef DEFAULT_UPDOWN
-# define DEFAULT_UPDOWN "ipsec _updown"
-#endif
 
 /* for now, a kludge */
 #define MAX_MAST 64
@@ -170,7 +165,7 @@ static void mast_process_raw_ifaces(struct raw_iface *rifaces)
 	ip_address lip; /* --listen filter option */
 
 	if (pluto_listen) {
-		err_t e = ttoaddr(pluto_listen, 0, AF_UNSPEC, &lip);
+		err_t e = ttoaddr_num(pluto_listen, 0, AF_UNSPEC, &lip);
 
 		if (e != NULL) {
 			DBG_log("invalid listen= option ignored: %s", e);
@@ -410,12 +405,11 @@ static bool mast_do_command(const struct connection *c, const struct spd_route *
 			   refhim,
 			   (c->policy & POLICY_SAREF_TRACK_CONNTRACK) ?
 			     "conntrack" :
-			   (c->policy & POLICY_SAREF_TRACK) ?
-			     "yes" : "no",
+			   bool_str((c->policy & POLICY_SAREF_TRACK) != LEMPTY),
 			   verb, verb_suffix,
 			   common_shell_out_str,
-			   sr->this.updown == NULL ?
-			     DEFAULT_UPDOWN : sr->this.updown)) {
+			   sr->this.updown))
+	{
 		loglog(RC_LOG_SERIOUS, "%s%s command too long!", verb,
 		       verb_suffix);
 		return FALSE;
@@ -606,6 +600,7 @@ static bool mast_sag_eroute(const struct state *st, const struct spd_route *sr,
 const struct kernel_ops mast_kernel_ops = {
 	.type = USE_MASTKLIPS,
 	.async_fdp = &pfkeyfd,
+	.route_fdp = NULL,
 	.replay_window = 64,
 
 	.pfkey_register = klips_pfkey_register,
@@ -618,11 +613,11 @@ const struct kernel_ops mast_kernel_ops = {
 	.add_sa = pfkey_add_sa,
 	.grp_sa = pfkey_grp_sa,
 	.del_sa = pfkey_del_sa,
-	.get_sa = NULL,
+	.get_sa = pfkey_get_sa,
 	.get_spi = NULL,
 	.eroute_idle = pfkey_was_eroute_idle,
 	.inbound_eroute = FALSE,
-	.policy_lifetime = FALSE,
+	.scan_shunts = pfkey_scan_shunts,
 	.init = init_pfkey,
 	.exceptsocket = NULL,
 	.docommand = mast_do_command,
@@ -632,5 +627,5 @@ const struct kernel_ops mast_kernel_ops = {
 	.kern_name = "mast",
 	.overlap_supported = TRUE,
 	.sha2_truncbug_support = FALSE,
+	.v6holes = NULL,
 };
-#endif /* KLIPS */

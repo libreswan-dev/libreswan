@@ -1,10 +1,10 @@
 /*
- * Copyright (C) 2015 Andrew Cagney <andrew.cagney@gmail.com>
+ * Copyright (C) 2015-2016 Andrew Cagney <cagney@gnu.org>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -20,34 +20,18 @@
 
 #include "ike_alg.h"
 #include "test_buffer.h"
-#include "gcm_test_vectors.h"
+#include "ike_alg_test_gcm.h"
 
 #include "nss.h"
 #include "pk11pub.h"
 #include "crypt_symkey.h"
-
-struct gcm_test_vector {
-	const char *key;
-	/*
-	 * NIST provides a simple IV, while we require a separate SALT
-	 * and wire-IV.  The value gets split before being passed to
-	 * the do_crypt_hash method.
-	 */
-	const char *salted_iv;
-	const char *aad;
-	const char *plaintext;
-	const char *ciphertext;
-	const char *tag;
-};
-
-const int salt_size = 4;
 
 /*
  * Ref: http://csrc.nist.gov/groups/STM/cavp/documents/mac/gcmtestvectors.zip
  *
  * some select entries
  */
-const struct gcm_test_vector aes_gcm_test_vectors[] = {
+static const struct gcm_test_vector aes_gcm_test_vectors[] = {
 	{
 		.key ="0xcf063a34d4a9a76c2c86787d3f96db71",
 		.salted_iv = "0x113b9785971864c83b01c787",
@@ -84,90 +68,75 @@ const struct gcm_test_vector aes_gcm_test_vectors[] = {
 		.key = NULL,
 	}
 };
+const struct gcm_test_vector *const aes_gcm_tests = aes_gcm_test_vectors;
 
-static bool test_gcm_vector(CK_MECHANISM_TYPE cipher_mechanism,
-			    bool (*do_crypt_hash)(u_int8_t *salt, size_t salt_size,
-						  u_int8_t *wire_iv, size_t wire_iv_size,
-						  u_int8_t *aad, size_t aad_size,
-						  u_int8_t *text_and_tag,
-						  size_t text_size, size_t tag_size,
-						  PK11SymKey *key, bool enc),
+static bool test_gcm_vector(const struct encrypt_desc *encrypt_desc,
 			    const struct gcm_test_vector *test)
 {
 	DBG(DBG_CRYPT, DBG_log("test_gcm_vector: enter"));
 
+	const size_t salt_size = encrypt_desc->salt_size;
+
 	bool ok = TRUE;
 
-	PK11SymKey *sym_key = decode_to_key(cipher_mechanism, test->key);
+	PK11SymKey *sym_key = decode_to_key(encrypt_desc, test->key);
 
 	chunk_t salted_iv = decode_to_chunk("salted IV", test->salted_iv);
-	chunk_t salt = extract_chunk("salt", salted_iv, 0, salt_size);
-	chunk_t wire_iv = extract_chunk("wire-IV", salted_iv, salt_size,
-					salted_iv.len - salt_size);
+	passert(salted_iv.len == encrypt_desc->wire_iv_size + salt_size);
+	chunk_t salt = { .ptr = salted_iv.ptr, .len = salt_size };
+	chunk_t wire_iv = { .ptr = salted_iv.ptr + salt_size, .len = salted_iv.len - salt_size };
+
 	chunk_t aad = decode_to_chunk("AAD", test->aad);
 	chunk_t plaintext = decode_to_chunk("plaintext", test->plaintext);
 	chunk_t ciphertext = decode_to_chunk("ciphertext", test->ciphertext);
 	passert(plaintext.len == ciphertext.len);
+	size_t len = plaintext.len;
 	chunk_t tag = decode_to_chunk("tag", test->tag);
 
 	chunk_t text_and_tag;
-	text_and_tag.len = plaintext.len + tag.len;
+	text_and_tag.len = len + tag.len;
 	text_and_tag.ptr = alloc_bytes(text_and_tag.len, "GCM data");
 
-	int enc;
-	for (enc = 0; enc < 2; enc++) {
-		u_int8_t *ptr = text_and_tag.ptr;
-		chunkcpy(ptr, (enc ? plaintext : ciphertext));
-		if (enc) {
-			memset(ptr, 0, tag.len);
-			ptr += tag.len;
-		} else {
-			chunkcpy(ptr, tag);
-		}
-		passert(ptr == text_and_tag.ptr + text_and_tag.len);
-
-		DBG(DBG_CRYPT,
-		    DBG_log("test_gcm_vector: %s: aad-size=%zd salt-size=%zd wire-IV-size=%zd text-size=%zd tag-size=%zd",
-			    enc ? "encrypt" : "decrypt",
-			    aad.len, salt.len, wire_iv.len, plaintext.len, tag.len);
-		    DBG_dump_chunk("test_gcm_vector: text+tag on call",
-				   text_and_tag));
-		if (!do_crypt_hash(salt.ptr, salt.len,
-				   wire_iv.ptr, wire_iv.len,
-				   aad.ptr, aad.len,
-				   text_and_tag.ptr,
-				   plaintext.len, tag.len,
-				   sym_key, enc)) {
-			ok = FALSE;
-		}
-		DBG(DBG_CRYPT, DBG_dump_chunk("test_gcm_vector: text+tag on return",
-					      text_and_tag));
-
-		size_t offset = 0;
-		if (enc) {
-			if (!compare_chunk("output ciphertext",
-					   ciphertext, text_and_tag.ptr + offset)) {
-				ok = FALSE;
-			}
-			offset += ciphertext.len;
-		} else {
-			if (!compare_chunk("output plaintext",
-					   plaintext,  text_and_tag.ptr + offset)) {
-				ok = FALSE;
-			}
-			offset += plaintext.len;
-		}
-		if (!compare_chunk("TAG", tag, text_and_tag.ptr + offset)) {
-			ok = FALSE;
-		}
-		offset += tag.len;
-
-		passert(offset == text_and_tag.len);
+	/* macro to test encryption or decryption
+	 *
+	 * This would be better as a function but it uses too many locals
+	 * from test_gcm_vector to be pleasant:
+	 *	text_and_tag, len, tag, aad, salt, wire_iv, sym_key
+	 */
+#	define try(enc, desc, from, to) {  \
+		memcpy(text_and_tag.ptr, from.ptr, from.len);  \
+		text_and_tag.len = len + tag.len;  \
+		DBG(DBG_CRYPT,  \
+		    DBG_log("test_gcm_vector: %s: aad-size=%zd salt-size=%zd wire-IV-size=%zd text-size=%zd tag-size=%zd",  \
+			    desc, aad.len, salt.len, wire_iv.len, len, tag.len);  \
+		    DBG_dump_chunk("test_gcm_vector: text+tag on call",  \
+				   text_and_tag));  \
+		if (!encrypt_desc->encrypt_ops->do_aead(encrypt_desc,  \
+							salt.ptr, salt.len, \
+							wire_iv.ptr, wire_iv.len, \
+							aad.ptr, aad.len, \
+							text_and_tag.ptr, \
+							len, tag.len,	\
+							sym_key, enc) || \
+		    !verify_chunk_data("output ciphertext",  \
+				   to, text_and_tag.ptr) ||  \
+		    !verify_chunk_data("TAG", tag, text_and_tag.ptr + len))  \
+			ok = FALSE;  \
+		DBG(DBG_CRYPT, DBG_dump_chunk("test_gcm_vector: text+tag on return",  \
+					      text_and_tag));  \
 	}
 
+	/* test decryption */
+	memcpy(text_and_tag.ptr + len, tag.ptr, tag.len);
+	try(FALSE, "decrypt", ciphertext, plaintext);
+
+	/* test encryption */
+	memset(text_and_tag.ptr + len, '\0', tag.len);
+	try(TRUE, "encrypt", plaintext, ciphertext);
+
+#	undef try
+
 	freeanychunk(salted_iv);
-	freeanychunk(salt);
-	freeanychunk(wire_iv);
 	freeanychunk(aad);
 	freeanychunk(plaintext);
 	freeanychunk(ciphertext);
@@ -175,32 +144,21 @@ static bool test_gcm_vector(CK_MECHANISM_TYPE cipher_mechanism,
 	freeanychunk(text_and_tag);
 
 	/* Clean up.  */
-	free_any_symkey("sym_key", &sym_key);
+	release_symkey(__func__, "sym_key", &sym_key);
 
 	DBG(DBG_CRYPT, DBG_log("test_gcm_vector: %s", ok ? "passed" : "failed"));
 	return ok;
 }
 
-static bool test_gcm_vectors(CK_MECHANISM_TYPE cipher_mechanism,
-			     bool (*do_crypt_hash)(u_int8_t *salt, size_t salt_size,
-						   u_int8_t *wire_iv, size_t wire_iv_size,
-						   u_int8_t *aad, size_t aad_size,
-						   u_int8_t *text_and_tag,
-						   size_t text_size, size_t tag_size,
-						   PK11SymKey *key, bool enc),
-			     const struct gcm_test_vector *tests)
+bool test_gcm_vectors(const struct encrypt_desc *encrypt_desc,
+		      const struct gcm_test_vector *tests)
 {
 	bool ok = TRUE;
 	const struct gcm_test_vector *test;
 	for (test = tests; test->key != NULL; test++) {
-		if (!test_gcm_vector(cipher_mechanism, do_crypt_hash, test)) {
+		if (!test_gcm_vector(encrypt_desc, test)) {
 			ok = FALSE;
 		}
 	}
 	return ok;
-}
-
-bool test_aes_gcm(void)
-{
-	return test_gcm_vectors(CKM_AES_GCM, do_aes_gcm, aes_gcm_test_vectors);
 }

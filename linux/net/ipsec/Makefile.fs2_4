@@ -8,7 +8,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -172,7 +172,7 @@ obj-m += $(O_TARGET)
 # MOST of these flags are in KERNEL_CFLAGS already!
 
 # cannot use both -Wpointer-arith and -Werror with CONFIG_HIGHMEM
-# include/linux/highmem.h has an inline function definition that uses void* arithmentic.
+# include/linux/highmem.h has an inline function definition that uses void* arithmetic.
 ifeq ($(CONFIG_NOHIGHMEM),y)
 #EXTRA_CFLAGS += -Wpointer-arith
 endif

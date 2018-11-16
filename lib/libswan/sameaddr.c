@@ -6,7 +6,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
+ * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,7 +17,7 @@
 #include "libreswan.h"
 #include "constants.h"
 
-static int samenbits(const ip_address *a, const ip_address *b, int n);
+static bool samenbits(const ip_address *a, const ip_address *b, int n);
 
 /*
  * addrcmp - compare two addresses
@@ -35,10 +35,10 @@ const ip_address *b;
 	if (at != bt) {
 		return (at < bt) ? -1 : 1;
 	} else {
-		unsigned char *ap;
-		unsigned char *bp;
-		size_t as = addrbytesptr(a, &ap);
-		size_t bs = addrbytesptr(b, &bp);
+		const unsigned char *ap;
+		const unsigned char *bp;
+		size_t as = addrbytesptr_read(a, &ap);
+		size_t bs = addrbytesptr_read(b, &bp);
 
 		size_t n = (as < bs) ? as : bs;	/* min(as, bs) */
 
@@ -171,19 +171,19 @@ const ip_address * a;
 const ip_address *b;
 int nbits;
 {
-	unsigned char *ap;
-	unsigned char *bp;
+	const unsigned char *ap;
+	const unsigned char *bp;
 	size_t n;
 	int m;
 
 	if (addrtypeof(a) != addrtypeof(b))
 		return 0;	/* arbitrary */
 
-	n = addrbytesptr(a, &ap);
+	n = addrbytesptr_read(a, &ap);
 	if (n == 0)
 		return 0;	/* arbitrary */
 
-	(void) addrbytesptr(b, &bp);
+	(void) addrbytesptr_read(b, &bp);
 	if (nbits > (int)n * 8)
 		return 0;	/* "can't happen" */
 

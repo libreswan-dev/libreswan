@@ -5,7 +5,7 @@
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -17,10 +17,11 @@ import pexpect
 import sys
 import time
 import logging
+
 from fab import shell
 from fab import logutil
 
-# Can be anything as it either matches immediatly or dies with EOF.
+# Can be anything as it either matches immediately or dies with EOF.
 CONSOLE_TIMEOUT = 30
 
 class STATE:
@@ -32,6 +33,8 @@ class STATE:
     CRASHED = "crashed"
     DYING = "dying"
     PMSUSPENDED = "pmsuspended"
+
+_VIRSH = ["sudo", "virsh", "--connect", "qemu:///system"]
 
 class Domain:
 
@@ -51,8 +54,14 @@ class Domain:
 
     def run_status_output(self, command):
         self.logger.debug("running: %s", command)
-        status, output = subprocess.getstatusoutput(command)
-        output = output.strip()
+        # 3.5 has subprocess.run
+        process = subprocess.Popen(command,
+                                   stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT)
+        stdout, stderr = process.communicate()
+        status = process.returncode
+        output = stdout.decode("utf-8").strip()
         if status:
             self.logger.debug("virsh exited with unexpected status code %s\n%s",
                               status, output)
@@ -61,32 +70,38 @@ class Domain:
         return status, output
 
     def state(self):
-        status, output = self.run_status_output("sudo virsh domstate %s" % (self.name))
+        status, output = self.run_status_output(_VIRSH + ["domstate", self.name])
         if status:
             return None
         else:
             return output
 
     def shutdown(self):
-        return self.run_status_output("sudo virsh shutdown %s" % (self.name))
+        return self.run_status_output(_VIRSH + ["shutdown", self.name])
 
     def reboot(self):
-        return self.run_status_output("sudo virsh reboot %s" % (self.name))
+        return self.run_status_output(_VIRSH + ["reboot", self.name])
 
     def reset(self):
-        return self.run_status_output("sudo virsh reset %s" % (self.name))
+        return self.run_status_output(_VIRSH + ["reset", self.name])
 
     def destroy(self):
-        return self.run_status_output("sudo virsh destroy %s" % (self.name))
+        return self.run_status_output(_VIRSH + ["destroy", self.name])
 
     def start(self):
-        return self.run_status_output("sudo virsh start %s" % (self.name))
+        return self.run_status_output(_VIRSH + ["start", self.name])
+
+    def suspend(self):
+        return self.run_status_output(_VIRSH + ["suspend", self.name])
+
+    def resume(self):
+        return self.run_status_output(_VIRSH + ["resume", self.name])
 
     def dumpxml(self):
-        return self.run_status_output("sudo virsh dumpxml %s" % (self.name))
+        return self.run_status_output(_VIRSH + ["dumpxml", self.name])
 
     def console(self, timeout=CONSOLE_TIMEOUT):
-        command = "sudo virsh console --force %s" % (self.name)
+        command = " ".join(_VIRSH + ["console", "--force", self.name])
         self.logger.debug("opening console with: %s", command)
         console = shell.Remote(command, hostname=self.host_name,
                                prefix=self.prefix)
@@ -94,7 +109,7 @@ class Domain:
         # handler.  Otherwise something like control-c as the first
         # character sent might kill it.  If the machine is down, it
         # will get an EOF.
-        if console.expect(["Connected to domain %s\r\n" % self.name,
+        if console.expect(["Connected to domain %s\r\nEscape character is \\^]\r\n" % self.name,
                            pexpect.EOF],
                           timeout=timeout):
             self.logger.debug("got EOF from console")

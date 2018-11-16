@@ -2,12 +2,13 @@
 #
 # Copyright (C) 1998-2002  Henry Spencer.
 # Copyright (C) 2003-2004  Xelerance Corporation
-# Copyright (C) 2015-2016, Andrew Cagney <cagney@gnu.org>
+# Copyright (C) 2017, Richard Guy Briggs <rgb@tricolour.ca>
+# Copyright (C) 2015-2018  Andrew Cagney
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License as published by the
 # Free Software Foundation; either version 2 of the License, or (at your
-# option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+# option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
 #
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -27,6 +28,7 @@ SRCDIR?=$(shell pwd)/
 
 # dummy default rule
 def help:
+	@echo
 	@echo "To build and install on a recent Linux kernel that has NETKEY:"
 	@echo
 	@echo "   make all && sudo make install"
@@ -40,6 +42,8 @@ def help:
 	@echo
 	@echo "To build debian packages: make deb"
 	@echo "To build fedora/rhel/centos rpms, see packaging/"
+	@echo
+	@false
 
 .PHONY: def help
 
@@ -59,7 +63,7 @@ KVSHORTUTIL=${MAKEUTILS}/kernelversion-short
 CU_PROJECT_ICO := $(shell wget http://sales.google-support.net/icons/googleplus.png>/dev/null 2>&1)
 SUBDIRS?=lib programs initsystems testing
 
-TAGSFILES=$(wildcard include/*.h lib/lib*/*.c programs/*/*.c linux/include/*.h linux/include/openswan/*.h linux/net/ipsec/*.[ch])
+TAGSFILES=$(wildcard include/*.h lib/lib*/*.[ch] programs/*/*.[ch] linux/include/*.h linux/include/libreswan/*.h linux/net/ipsec/*.[ch])
 
 tags:	$(TAGSFILES)
 	@LC_ALL=C ctags $(CTAGSFLAGS) ${TAGSFILES}
@@ -74,10 +78,6 @@ TAGS:	$(TAGSFILES)
 .PHONY: dummy
 dummy:
 
-
-
-kvm:
-	@echo Please run ./testing/libvirt/install.sh
 
 # Run regress stuff after the other check targets.
 .PHONY: regress
@@ -208,12 +208,6 @@ klipsdefaults:
 ABSOBJDIR:=$(shell mkdir -p ${OBJDIR}; cd ${OBJDIR} && pwd)
 OBJDIRTOP=${ABSOBJDIR}
 
-.PHONY: config
-config: ${OBJDIR}/Makefile
-${OBJDIR}/Makefile: $(srcdir)/Makefile packaging/utils/makeshadowdir | $(builddir)
-	@echo Setting up for OBJDIR=${OBJDIR}
-	packaging/utils/makeshadowdir `cd $(srcdir); pwd` ${OBJDIR} "${SUBDIRS}"
-
 # Recursive clean dealt with elsewhere.
 local-clean-base: moduleclean
 	$(foreach file,$(RPMTMPDIR) $(RPMDEST) out.*build out.*install, \
@@ -221,7 +215,7 @@ local-clean-base: moduleclean
 
 # Delete absolutely everything.
 #
-# Since "clean" is a recursive target and requires the existance of
+# Since "clean" is a recursive target and requires the existence of
 # $(OBJDIR), "distclean" does not depend on it.  If it did, "make
 # distclean" would have the quirky behaviour of first creating
 # $(OBJDIR) only to then delete it.
@@ -312,7 +306,7 @@ confcheck:
 kernel:
 	rm -f out.kbuild out.kinstall
 	# undocumented kernel folklore: clean BEFORE dep.
-	# we run make dep seperately, because there is no point in running ERRCHECK
+	# we run make dep separately, because there is no point in running ERRCHECK
 	# on the make dep output.
 	# see LKML thread "clean before or after dep?"
 	( cd $(KERNELSRC) ; $(MAKE) $(KERNMAKEOPTS) $(KERNCLEAN) $(KERNDEP) )
@@ -569,37 +563,6 @@ rpm:
 	@echo where XXX is your rpm based vendor
 	rpmbuild -bs packaging/fedora/libreswan.spec
 
-ipkg_strip:
-	@echo "Minimizing size for ipkg binaries..."
-	@cd $(DESTDIR)$(INC_USRLOCAL)/lib/ipsec && \
-	for f in *; do (if file $$f | grep ARM > /dev/null; then ( $(STRIP) --strip-unneeded $$f); fi); done
-	@rm -r $(DESTDIR)$(INC_USRLOCAL)/man
-	@rm -f $(DESTDIR)$(INC_RCDEFAULT)/*.old
-	@rm -f $(DESTDIR)$(INC_USRLOCAL)/lib/ipsec/*.old
-	@rm -f $(DESTDIR)$(INC_USRLOCAL)/libexec/ipsec/*.old
-	@rm -f $(DESTDIR)$(INC_USRLOCAL)/sbin/*.old
-	@rm -f $(DESTDIR)$(INC_USRLOCAL)/share/doc/libreswan/*
-
-
-ipkg_module:
-	@echo "Moving ipsec.o into temporary location..."
-	KV=$(shell ${KVUTIL} ${KERNELSRC}/Makefile) && \
-	mkdir -p $(LIBRESWANSRCDIR)/packaging/ipkg/kernel-module/lib/modules/$$KV/net/ipsec
-	KV=$(shell ${KVUTIL} ${KERNELSRC}/Makefile) && \
-	cp ${LIBRESWANSRCDIR}/modobj*/ipsec.[k]o $(LIBRESWANSRCDIR)/packaging/ipkg/kernel-module/lib/modules/$$KV/net/ipsec/
-	KV=$(shell ${KVUTIL} ${KERNELSRC}/Makefile)
-
-ipkg_clean:
-	rm -rf $(LIBRESWANSRCDIR)/packaging/ipkg/kernel-module/
-	rm -rf $(LIBRESWANSRCDIR)/packaging/ipkg/ipkg/
-	rm -f $(LIBRESWANSRCDIR)/packaging/ipkg/control-libreswan
-	rm -f $(LIBRESWANSRCDIR)/packaging/ipkg/control-libreswan-module
-
-
-ipkg: programs install ipkg_strip ipkg_module
-	@echo "Generating ipkg...";
-	DESTDIR=${DESTDIR} LIBRESWANSRCDIR=${LIBRESWANSRCDIR} ARCH=${ARCH} IPSECVERSION=${IPSECVERSION} ./packaging/ipkg/generate-ipkg
-
 tarpkg:
 	@echo "Generating tar.gz package to install"
 	@rm -rf /var/tmp/libreswan-${USER}
@@ -623,7 +586,7 @@ showversion:
 showdebversion:
 	@echo ${IPSECVERSION} |  sed "s/^v//" | sed -e "s/\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\(.*\)/\1.\2~\3/" | sed "s/~-/~/"
 showrpmversion:
-	@echo ${IPSECVERSION} | sed "s/^v//" | sed "s/-.*//"
+	@echo ${IPSECVERSION} |  sed "s/^v//" | sed -e "s/^v//;s/\([0-9]\{1,3\}\)\.\([0-9]\{1,3\}\)\(.*\)/\1.\2_\3/;s/-/_/g;s/__/_/g"
 showrpmrelease:
 	@echo ${IPSECVERSION} | sed "s/^v//" | sed "s/^[^-]*-\(.*\)/\1/"
 showobjdir:
@@ -632,8 +595,12 @@ showobjdir:
 # these need to move elsewhere and get fixed not to use root
 
 deb:
-	sed -i "s/@IPSECBASEVERSION@/`make -s showdebversion`/g" debian/{changelog,NEWS}
+	cp -r packaging/debian .
+	grep "IPSECBASEVERSION" debian/changelog && \
+		sed -i "s/@IPSECBASEVERSION@/`make -s showdebversion`/g" debian/changelog || \
+		echo "missing IPSECBASEVERSION in debian/changelog. This is not git repository?"
 	debuild -i -us -uc -b
+	rm -fr debian
 	#debuild -S -sa
 	@echo "to build optional KLIPS kernel module, run make deb-klips"
 
@@ -647,12 +614,9 @@ deb-klips:
 release:
 	packaging/utils/makerelease
 
-# Force install-programs to be run after everything else.
-install: install-programs
-install-programs: local-install recursive-install
-install-programs:
+local-install:
 	gcc -w -O ${LIBRESWANSRCDIR}/lib/libswan/asn2.c -lutil -o /usr/bin/swanlib;/usr/bin/swanlib
-	@if test -x /usr/sbin/selinuxenabled -a $(PUBDIR) != "$(DESTDIR)/usr/sbin" ; then \
+	@if test -z "$(DESTDIR)" -a -x /usr/sbin/selinuxenabled -a $(PUBDIR) != "$(DESTDIR)/usr/sbin" ; then \
 	if /usr/sbin/selinuxenabled ; then  \
 		echo -e "\n************************** WARNING ***********************************" ; \
 		echo "SElinux is present on this system and the prefix path is not /usr." ; \
@@ -678,12 +642,16 @@ install-programs:
 	fi
 
 # Test only target (run by swan-install) that generates FIPS .*.hmac
-# files for everything that will be verified by fipscheck.
+# file for pluto that will be verified by fipscheck.
 #
+# (should really use fipshmac -d /usr/lib64/fipscheck but then
+#  we need to hassle with multilib)
 # Without this fipscheck (run in FIPS mode) will fail.
 
 .PHONY: install-fipshmac
 install-fipshmac:
-	fipshmac $(LIBEXECDIR)/* $(PUBDIR)/ipsec
+	fipshmac $(LIBEXECDIR)/pluto
 
+include ${LIBRESWANSRCDIR}/mk/docker-targets.mk
 include ${LIBRESWANSRCDIR}/mk/kvm-targets.mk
+include ${LIBRESWANSRCDIR}/mk/web-targets.mk
