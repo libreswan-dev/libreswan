@@ -1,8 +1,8 @@
 # ESP should not show TFC
-grep " IPsec SA established tunnel mode" /tmp/pluto.log
+grep "PARENT SA established" /tmp/pluto.log
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
-../bin/check-for-core.sh
+if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

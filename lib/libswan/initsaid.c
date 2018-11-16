@@ -5,7 +5,7 @@
  * This library is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Library General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/lgpl-2.1.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/lgpl.txt>.
  *
  * This library is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -13,7 +13,8 @@
  * License for more details.
  */
 
-#include "ip_said.h"
+#include "internal.h"
+#include "libreswan.h"
 
 /*
  * initsaid - initialize SA ID from bits

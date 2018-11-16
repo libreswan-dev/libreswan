@@ -12,7 +12,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -23,7 +23,7 @@
 struct host_pair {
 	struct {
 		ip_address addr;
-		uint16_t host_port;            /* IKE port */
+		u_int16_t host_port;            /* IKE port */
 		bool host_port_specific;        /* if above is interesting */
 	} me, him;
 	struct connection *connections;         /* connections with this pair */
@@ -34,16 +34,15 @@ struct host_pair {
 extern struct host_pair *host_pairs;
 
 extern void connect_to_host_pair(struct connection *c);
-
 extern struct connection *find_host_pair_connections(const ip_address *myaddr,
-						     uint16_t myport,
+						     u_int16_t myport,
 						     const ip_address *hisaddr,
-						     uint16_t hisport);
+						     u_int16_t hisport);
 
 extern struct host_pair *find_host_pair(const ip_address *myaddr,
-					uint16_t myport,
+					u_int16_t myport,
 					const ip_address *hisaddr,
-					uint16_t hisport);
+					u_int16_t hisport);
 
 #define list_rm(etype, enext, e, ehead) { \
 		etype **ep; \
@@ -52,6 +51,6 @@ extern struct host_pair *find_host_pair(const ip_address *myaddr,
 		*ep = (e)->enext; \
 	}
 
-void delete_oriented_hp(struct connection *c);
+extern void remove_host_pair(struct host_pair *hp);
 
 extern struct connection *connections;

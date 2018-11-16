@@ -1,9 +1,9 @@
-../../pluto/bin/ipsec-look.sh
+ipsec look
 # should not show any hits because block prevents trigger
-grep "initiate on demand" /tmp/pluto.log
+grep "fos_" /tmp/pluto.log
 : ==== cut ====
 ipsec auto --status
 : ==== tuc ====
-../bin/check-for-core.sh
+if [ -n "`ls /tmp/core* 2>/dev/null`" ]; then echo CORE FOUND; mv /tmp/core* OUTPUT/; fi
 if [ -f /sbin/ausearch ]; then ausearch -r -m avc -ts recent ; fi
 : ==== end ====

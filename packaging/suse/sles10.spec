@@ -12,7 +12,7 @@ Version: IPSECBASEVERSION
 %define ourrelease 1
 Release: %{ourrelease}
 License: GPLv2
-Url: https://libreswan.org/
+Url: http://www.libreswan.org/
 Source: libreswan-%{srcpkgver}.tar.gz
 Patch1: rc.patch
 Patch2: kernelsrc.patch
@@ -186,7 +186,7 @@ exit 0
 
 * Mon Oct 10 2005 Paul Wouters <paul@xelerance.com>
 - Updated for klips on xen
-- added ldconfig for post klips to obtain ipsec module dependencies
+- added ldconfig for post klips to obtain ipsec module dependancies
 - Run 'make include' since on FC4 kernel source does not have the links yet.
 
 * Wed Jan  5 2005 Paul Wouters <paul@xelerance.com>

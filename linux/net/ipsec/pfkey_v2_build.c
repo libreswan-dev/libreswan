@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -1369,8 +1369,7 @@ int pfkey_msg_build(struct sadb_msg **pfkey_msg, struct sadb_ext *extensions[],
 	/* figure out the total size for all the requested extensions */
 	total_size = IPSEC_PFKEYv2_WORDS(sizeof(struct sadb_msg));
 	DEBUGGING(PF_KEY_DEBUG_BUILD,
-		  "pfkey_msg_build: extensions[%d] needs %zu bytes\n",
-		  0,
+		  "pfkey_msg_build: extensions[%d] needs %zu bytes\n", 0,
 		  total_size * IPSEC_PFKEYv2_ALIGN);
 	for (ext = 1; ext <= K_SADB_EXT_MAX; ext++) {
 		if (extensions[ext]) {
@@ -1393,9 +1392,9 @@ int pfkey_msg_build(struct sadb_msg **pfkey_msg, struct sadb_ext *extensions[],
 
 	DEBUGGING(PF_KEY_DEBUG_BUILD,
 		  "pfkey_msg_build: "
-		  "pfkey_msg=0p%p allocated %zu bytes, &(extensions[0])=0p%p\n",
+		  "pfkey_msg=0p%p allocated %lu bytes, &(extensions[0])=0p%p\n",
 		  *pfkey_msg,
-		  total_size * IPSEC_PFKEYv2_ALIGN,
+		  (unsigned long)(total_size * IPSEC_PFKEYv2_ALIGN),
 		  &(extensions[0]));
 
 	memcpy(*pfkey_msg,
@@ -1425,21 +1424,27 @@ int pfkey_msg_build(struct sadb_msg **pfkey_msg, struct sadb_ext *extensions[],
 				SENDERR(EINVAL);
 			}
 
-			size_t el = extensions[ext]->sadb_ext_len * IPSEC_PFKEYv2_ALIGN;
-
 			DEBUGGING(PF_KEY_DEBUG_BUILD,
 				  "pfkey_msg_build: "
-				  "copying %zu bytes from extensions[%u] (type=%d)\n",
-				  el,
+				  "copying %lu bytes from extensions[%u] (type=%d)\n",
+				  (unsigned long)(extensions[ext]->sadb_ext_len
+						  *
+						  IPSEC_PFKEYv2_ALIGN),
 				  ext,
 				  extensions[ext]->sadb_ext_type);
 
 			memcpy(pfkey_ext,
 			       extensions[ext],
-			       el);
+			       (extensions[ext])->sadb_ext_len *
+			       IPSEC_PFKEYv2_ALIGN);
+			{
+				char *pfkey_ext_c = (char *)pfkey_ext;
 
-			pfkey_ext = (struct sadb_ext *)
-				((unsigned char *)pfkey_ext + el);
+				pfkey_ext_c +=
+					(extensions[ext])->sadb_ext_len *
+					IPSEC_PFKEYv2_ALIGN;
+				pfkey_ext = (struct sadb_ext *)pfkey_ext_c;
+			}
 
 			/* Mark that we have seen this extension */
 			pfkey_mark_extension(ext, &extensions_seen);

@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -36,7 +36,7 @@ extern SECStatus NSS_InitReadWrite(const char *configdir);
 /*
  * not needed here, but squelch a lswconf.h build error
  */
-const char *progname;
+char *progname;
 
 static int import_crl(const char *url, unsigned char *buf, size_t len)
 {
@@ -65,6 +65,7 @@ static int import_crl(const char *url, unsigned char *buf, size_t len)
  */
 int main(int argc, char *argv[])
 {
+
 	char *url, *lenstr;
 	unsigned char *buf, *tbuf;
 	size_t len, tlen;
@@ -109,7 +110,7 @@ int main(int argc, char *argv[])
 
 	const struct lsw_conf_options *oco = lsw_init_options();
 	lsw_nss_buf_t err;
-	if (!lsw_nss_setup(oco->nssdir, 0, lsw_nss_get_password, err)) {
+	if (!lsw_nss_setup(oco->nssdb, 0, lsw_nss_get_password, err)) {
 		fprintf(stderr, "%s: %s\n", progname, err);
 		exit(1);
 	}

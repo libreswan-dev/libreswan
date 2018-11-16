@@ -1,2 +1,0 @@
-east and west send their entire certificate chains
-	pass

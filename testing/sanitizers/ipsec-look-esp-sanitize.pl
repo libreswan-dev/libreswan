@@ -43,7 +43,7 @@ while(<>) {
     print STDERR "inlook:$inlook ineroute:$ineroute intncfg: $intncfg inspigrp: $inspigrp inroute: $inroute\nProcessing $_\n";
   }
 
-  if(!$inlook && (/ ipsec look/ || /ipsec-look.sh/)) {
+  if(!$inlook && / ipsec look/) {
     $inlook=1;
 
     # also reset tunnel list.
@@ -56,8 +56,9 @@ while(<>) {
     # eat the date that is on the next line.
     print;
 
-    # skip date
     $_=<>;
+    # east Thu Nov  7 22:22:34 GMT 2002
+    s/(.*) ... ... .* ..:..:.. (?:GMT|EDT|EST|EET|CET|UTC) ..../\1 NOW/;
 
     $ineroute=1;
     $intncfg=0;
@@ -96,15 +97,15 @@ while(<>) {
 	      (m,^(.*:.*\-\>.*:.*\=\>) (.*)$,)) {
 	# okay, rebuild $_ with sanitized versions, and record the order of the
 	# tunnels by dest IP $3.
-
+	
 	$eroute=$1;
 	$group=$2;
 	@sas=split(/ /, $group);
-
+	
 	if($debug) {
 	  print STDERR "ineroute, with $#sas SAs\n";
 	}
-
+	
 	@new_sa=();
 	for $sa (@sas) {
 	  print STDERR "Eroute processing SA: $sa\n" if $debug;
@@ -146,7 +147,7 @@ while(<>) {
 	    push(@new_sa, "UNK:$sa");
 	  }
 	}
-
+	
 	print $eroute." ".join(' ', @new_sa)."\n";
 	next;
       } elsif(/^(ipsec.*->eth.* mtu=.*)(\(.*\))(->.*)/) {
@@ -179,34 +180,38 @@ while(<>) {
       #
       # note that other sanitizing is applied to $4.
       if(m,^(esp0x)([0-9a-f]{1\,8})@([\d.]+)( ESP_.*),) {
-
+	
 	$rest = $4;
 	$esp1   = $1;
 	$spinum = $2;
 	$spiip  = $3;
-
+	
+	$rest = &sanitize_sadata($rest);
+	
 	$key=$esp1.$spinum."@".$spiip;
 	$espline=$esp1."SPISPI@".$spiip.$rest;
 	$xname="esp";
-
+	
 	&sourcerecord($rest,$key,$xname);
-
+	
 	#print "remembering that $key -> $espline\n";
 	$spigrp{$key}=$espline;
       }
       elsif(m,^(ah0x)([0-9a-f]{1\,8})@([\d.]+)( AH_.*),) {
-
+	
 	$rest = $4;
 	$ah1   = $1;
 	$spinum = $2;
 	$spiip  = $3;
-
+	
+	$rest = &sanitize_sadata($rest);
+	
 	$key=$ah1.$spinum."@".$spiip;
 	$ahline=$ah1."SPISPI@".$spiip.$rest;
 	$xname="ah";
-
+	
 	&sourcerecord($rest,$key,"ah");
-
+	
 	#print "remembering that $key -> $ahline\n";
 	$spigrp{$key}=$ahline;
       }
@@ -218,13 +223,15 @@ while(<>) {
 	$tun1 = $1;
 	$spinum = $2;
 	$spiip  = $3;
-
+	
+	$rest = &sanitize_sadata($rest);
+	
 	$key=$tun1.$spinum."@".$spiip;
 	$tunline=$tun1."TUN#@".$spiip.$rest;
 	$xname="tun";
-
+	
 	&sourcerecord($rest,$key,$xname);
-
+	
 	#print "remembering that $key -> $tunline\n";
 	$spigrp{$key}=$tunline;
       }
@@ -237,13 +244,15 @@ while(<>) {
 	$comp = $1;
 	$spinum = $2;
 	$spiip  = $3;
-
+	
+	$rest = &sanitize_sadata($rest);
+	
 	$key=$comp.$spinum."@".$spiip;
 	$compline=$comp."COMP#@".$spiip.$rest;
 	$xname="comp";
-
+	
 	&sourcerecord($rest,$key,$xname);
-
+	
 	#print "remembering that $key -> $compline\n";
 	$spigrp{$key}=$compline;
       }
@@ -251,15 +260,15 @@ while(<>) {
       elsif(/^ROUTING TABLE/ || /^Destination/ || ($inspigrp && /^$/)) {
 	$inspigrp=0;
 	$inroute=1;
-
+	
 	# dump the esp/spi table.
-
+	
 	#print "Dumping out groups:\n";
 	foreach $sa (@salist) {
 	  #print "SA: $sa\n";
 	  print $spigrp{$sa}."\n";
 	}
-
+	
 	#print "Dumping in groups:\n";
 	foreach $ip (sort keys %ips) {
 	  foreach $type ("esp","ah","comp","tun") {
@@ -274,7 +283,7 @@ while(<>) {
 	    #print "\n";
 	  }
 	}
-
+	
       }
     }
 
@@ -302,5 +311,29 @@ sub sourcerecord {
 
     $ips{$srcip}++;
   }
+}
+
+
+sub sanitize_sadata {
+  local($rest)=@_;
+
+  $rest =~ s/iv=0x[0-9a-f]{32}/iv=0xIVISFORRANDOM000IVISFORRANDOM000/;
+  $rest =~ s/iv=0x[0-9a-f]{16}/iv=0xIVISFORRANDOM000/;
+
+  $rest =~ s/jiffies=[0-9a-f]{10}/jiffies=0123456789/;
+
+  $rest =~ s/addtime\(.*,.*,.*\)//;
+  $rest =~ s/usetime\(.*,.*,.*\)//;
+  $rest =~ s/bytes\(.*\)//;
+  $rest =~ s/life\(c,s,h\)= //g;
+
+  $rest =~ s/bit=\S*//g;
+  $rest =~ s/idle=\S*//g;
+  $rest =~ s/refcount=\S*//g;
+  $rest =~ s/ref=\S*//g;
+  $rest =~ s/seq=\S*//g;
+  $rest =~ s/ratio=\S*//g;
+
+  $rest;
 }
 

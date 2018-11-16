@@ -1,8 +1,8 @@
 /*
  * IPSEC Tunneling code. Heavily based on drivers/net/new_tunnel.c
  * Copyright (C) 1996, 1997  John Ioannidis.
- * Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2016 Richard Guy Briggs.
- * Copyright (C) 2012, 2016 Paul Wouters <paul@libreswan.org>
+ * Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003  Richard Guy Briggs.
+ * Copyright (C) 2012 Paul Wouters <paul@libreswan.org>
  * Copyright (C) 2012  David McCullough <david_mccullough@mcafee.com>
  *
  * OCF/receive state machine written by
@@ -12,7 +12,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -145,14 +145,17 @@ DEBUG_NO_STATIC int ipsec_tunnel_close(struct net_device *dev)
 
 static inline int ipsec_tunnel_xmit2(struct sk_buff *skb)
 {
+
 #ifdef NET_26   /* 2.6 kernels */
-#  if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
 	return dst_output(dev_net(skb->dev), skb->sk, skb);
-#  else
+#else
 	return dst_output(skb);
-#  endif
+#endif
+
 #else
 	return ip_send(skb);
+
 #endif
 }
 
@@ -1577,10 +1580,8 @@ DEBUG_NO_STATIC int ipsec_tunnel_ioctl(struct net_device *dev,
 			    "klips_debug:ipsec_tunnel_ioctl: "
 			    "calling ipsec_tunnel_attatch...\n");
 		/* If this is an IP alias interface, get its real physical name */
-		/* fill_and_terminate(realphysname, cf->cf_name, IFNAMSIZ); */
-		strncpy(realphysname, cf->cf_name, IFNAMSIZ-1);
+		strncpy(realphysname, cf->cf_name, IFNAMSIZ);
 		realphysname[IFNAMSIZ - 1] = 0;
-
 		colon = strchr(realphysname, ':');
 		if (colon)
 			*colon = 0;
@@ -1873,11 +1874,7 @@ struct net_device *ipsec_get_device(int inst)
 int ipsec_device_event(struct notifier_block *unused, unsigned long event,
 		       void *ptr)
 {
-#ifdef HAVE_NETDEV_INFO
-	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
-#else
 	struct net_device *dev = ptr;
-#endif
 	struct net_device *ipsec_dev;
 	struct ipsecpriv *priv;
 	int i;
@@ -1889,22 +1886,16 @@ int ipsec_device_event(struct notifier_block *unused, unsigned long event,
 			    event);
 		return NOTIFY_DONE;
 	}
+
 	/* check for loopback devices */
 	if (dev && (dev->flags & IFF_LOOPBACK))
 		return NOTIFY_DONE;
-
-	if (dev->name[0] == '\0') {
-		KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
-			    "klips_debug:ipsec_device_event: "
-			    "dev=\"\" ??? for event type.\n");
-	}
 
 	switch (event) {
 	case NETDEV_DOWN:
 	/* look very carefully at the scope of these compiler
 	   directives before changing anything... -- RGB */
 	case NETDEV_UNREGISTER:
-	case NETDEV_UNREGISTER_FINAL:
 		switch (event) {
 		case NETDEV_DOWN:
 			KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
@@ -1912,7 +1903,8 @@ int ipsec_device_event(struct notifier_block *unused, unsigned long event,
 				    "NETDEV_DOWN dev=%s flags=%x\n",
 				    dev->name,
 				    dev->flags);
-			if (strncmp(dev->name, "ipsec", strlen("ipsec")) == 0) {
+			if (strncmp(dev->name, "ipsec",
+				    strlen("ipsec")) == 0) {
 				printk(KERN_CRIT "IPSEC EVENT: KLIPS device %s shut down.\n",
 					dev->name);
 			}
@@ -1921,13 +1913,6 @@ int ipsec_device_event(struct notifier_block *unused, unsigned long event,
 			KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
 				    "klips_debug:ipsec_device_event: "
 				    "NETDEV_UNREGISTER dev=%s flags=%x\n",
-				    dev->name,
-				    dev->flags);
-			break;
-		case NETDEV_UNREGISTER_FINAL:
-			KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
-				    "klips_debug:ipsec_device_event: "
-				    "NETDEV_UNREGISTER_FINAL dev=%s flags=%x\n",
 				    dev->name,
 				    dev->flags);
 			break;
@@ -1942,6 +1927,8 @@ int ipsec_device_event(struct notifier_block *unused, unsigned long event,
 			priv = netdev_to_ipsecpriv(ipsec_dev);
 			if (priv) {
 				if (((struct net_device *)(priv->dev)) == dev) {
+					/* dev_close(ipsec_dev); */
+					/* return */
 					ipsec_tunnel_detach(ipsec_dev);
 					KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
 						    "klips_debug:ipsec_device_event: "
@@ -2030,16 +2017,12 @@ int ipsec_tunnel_init(struct net_device *dev)
 
 	KLIPS_PRINT(debug_tunnel,
 		    "klips_debug:ipsec_tunnel_init: "
-		    "allocating %zu bytes initialising device: %s\n",
-		    sizeof(struct ipsecpriv),
+		    "allocating %lu bytes initialising device: %s\n",
+		    (unsigned long) sizeof(struct ipsecpriv),
 		    dev->name ? dev->name : "NULL");
 
 #ifdef ipsec_alloc_netdev
-# ifdef HAS_PRIV_DESTRUCTOR
-	dev->priv_destructor         = free_netdev;
-# else
 	dev->destructor         = free_netdev;
-# endif
 #endif
 
 #ifndef HAVE_NETDEV_PRIV
@@ -2156,10 +2139,7 @@ int ipsec_tunnel_createnum(int ifnum)
 	}
 #ifndef ipsec_alloc_netdev
 	memset((caddr_t)dev_ipsec, 0, sizeof(struct net_device));
-	/* fill_and_terminate(dev_ipsec->name, name, sizeof(dev_ipsec->name)); */
-	strncpy(dev_ipsec->name, name, sizeof(dev_ipsec->name)-1);
-	dev_ipsec->name[sizeof(dev_ipsec->name)-1] ='\0';
-
+	strncpy(dev_ipsec->name, name, sizeof(dev_ipsec->name));
 #ifdef PAUL_FIXME
 	dev_ipsec->next = NULL;
 #endif
@@ -2200,9 +2180,9 @@ int ipsec_tunnel_init_devices(void)
 
 	KLIPS_PRINT(debug_tunnel & DB_TN_INIT,
 		    "klips_debug:ipsec_tunnel_init_devices: "
-		    "creating and registering IPSEC_NUM_IF=%u devices, allocating %zu per device, IFNAMSIZ=%u.\n",
+		    "creating and registering IPSEC_NUM_IF=%u devices, allocating %lu per device, IFNAMSIZ=%u.\n",
 		    IPSEC_NUM_IF,
-		    sizeof(struct net_device) + IFNAMSIZ,
+		    (unsigned long) (sizeof(struct net_device) + IFNAMSIZ),
 		    IFNAMSIZ);
 
 	for (i = 0; i < IPSEC_NUM_IF; i++) {
@@ -2524,7 +2504,7 @@ DEBUG_NO_STATIC int ipsec_tunnel_attach(struct net_device *dev,
 
 #ifdef CONFIG_KLIPS_IPV6
 /*
- * stolen from ip6tables,  we need a copy in case iptables is compiled out of
+ * stolen from ip6tables,  we need a copy incase iptables iscompiled out of
  * the kernel.
  *
  * find the offset to specified header or the protocol number of last header

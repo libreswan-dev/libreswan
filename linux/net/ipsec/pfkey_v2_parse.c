@@ -6,7 +6,7 @@
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.  See <https://www.gnu.org/licenses/gpl2.txt>.
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
  *
  * This program is distributed in the hope that it will be useful, but
  * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
@@ -69,8 +69,8 @@ extern int debug_pfkey;
 #include <libreswan/pfkey_debug.h>
 
 unsigned int pfkey_lib_debug = PF_KEY_DEBUG_PARSE_NONE;
-libreswan_keying_debug_func_t pfkey_debug_func = NULL;
-libreswan_keying_debug_func_t pfkey_error_func = NULL;
+int (*pfkey_debug_func)(const char *message, ...) PRINTF_LIKE(1);
+int (*pfkey_error_func)(const char *message, ...) PRINTF_LIKE(1);
 
 #define SENDERR(_x) do { error = -(_x); goto errlab; } while (0)
 
@@ -143,7 +143,7 @@ DEBUG_NO_STATIC int pfkey_sa_parse(struct sadb_ext *pfkey_ext)
 	    pfkey_sa->sadb_sa_len != sizeof(struct sadb_sa) /
 	    IPSEC_PFKEYv2_ALIGN) {
 		ERROR("pfkey_sa_parse: "
-			"size wrong pfkey_sa->sadb_sa_len=%d sizeof(struct sadb_sa)=%d.\n",
+			"length wrong pfkey_sa->sadb_sa_len=%d sizeof(struct sadb_sa)=%d.\n",
 			pfkey_sa->sadb_sa_len,
 			(int)sizeof(struct k_sadb_sa));
 		SENDERR(EINVAL);
@@ -259,9 +259,8 @@ DEBUG_NO_STATIC int pfkey_lifetime_parse(struct sadb_ext  *pfkey_ext)
 	    sizeof(struct sadb_lifetime) / IPSEC_PFKEYv2_ALIGN) {
 		DEBUGGING(PF_KEY_DEBUG_PARSE_PROBLEM,
 			  "pfkey_lifetime_parse: "
-			  "size wrong pfkey_lifetime->sadb_lifetime_len=%d (*sizeof(u64)=%zu) sizeof(struct sadb_lifetime)=%d.\n",
+			  "length wrong pfkey_lifetime->sadb_lifetime_len=%d sizeof(struct sadb_lifetime)=%d.\n",
 			  pfkey_lifetime->sadb_lifetime_len,
-			  pfkey_lifetime->sadb_lifetime_len * IPSEC_PFKEYv2_ALIGN,
 			  (int)sizeof(struct sadb_lifetime));
 		SENDERR(EINVAL);
 	}
@@ -1302,7 +1301,6 @@ int pfkey_msg_parse(struct sadb_msg *pfkey_msg,
 				  pfkey_v2_sadb_type_string(pfkey_msg->
 							    sadb_msg_type));
 		}
-	/* FALLTHROUGH */
 	case K_SADB_ACQUIRE:
 	case K_SADB_REGISTER:
 	case K_SADB_EXPIRE:
@@ -1315,7 +1313,6 @@ int pfkey_msg_parse(struct sadb_msg *pfkey_msg,
 							    sadb_msg_type));
 			SENDERR(EINVAL);
 		}
-		break;
 	default:
 		break;
 	}

@@ -1,4 +1,6 @@
-test for https://github.com/libreswan/libreswan/issues/126
+Same as netkey-pluto-02, but now, some administrator (eg Tuomo) has
+decided to blackhole unused address space using:
 
-The test case up to at least 3.22 shows a weird interaction
-with conn %default and another bad conn on a good conn.
+ip route add unreachable 192.0.0.0/16 at east or west.
+
+Apparently, netkey would "need the routing hack" to keep working.

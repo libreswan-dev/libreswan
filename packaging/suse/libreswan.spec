@@ -14,7 +14,7 @@ Version: IPSECBASEVERSION
 %define ourrelease 1
 Release: %{ourrelease}
 License: GPLv2
-Url: https://libreswan.org/
+Url: http://www.libreswan.org/
 Source: libreswan-%{srcpkgver}.tar.gz
 Patch1: rc.patch
 Group: Productivity/Networking/Security
@@ -68,13 +68,13 @@ sed -i 's/-Werror/#-Werror/' lib/liblwres/Makefile
 # Suse has no %{_libexecdir} directory, put it all in libdir instead (yuck)
 %{__make} \
   USERCOMPILE='-g $(RPM_OPT_FLAGS) -DGCC_LINT' \
+  INC_USRLOCAL=%{_prefix} \
   FINALBINDIR=%{_libdir}/ipsec \
   FINALLIBEXECDIR=%{_libdir}/ipsec \
-  FINALMANDIR=%{_mandir} \
-  INC_DOCDIR=share/doc/packages \
+  MANTREE=%{_mandir} \
   INC_RCDEFAULT=%{_initrddir} \
   INC_RCDIRS='/etc/init.d /etc/rc.d/init.d /etc/rc.d /sbin/init.d' \
-  INC_USRLOCAL=%{_prefix} \
+  INC_DOCDIR=share/doc/packages \
   programs
 %if %{buildklips}
 FS=$(pwd)
@@ -90,11 +90,11 @@ done
 %install
 %{__make} \
   DESTDIR=%{buildroot} \
+  INC_USRLOCAL=%{_prefix} \
   FINALBINDIR=%{_libdir}/ipsec \
   FINALLIBEXECDIR=%{_libdir}/ipsec \
-  FINALMANDIR=%{_mandir} \
+  MANTREE=%{buildroot}%{_mandir} \
   INC_RCDEFAULT=%{_initrddir} \
-  INC_USRLOCAL=%{_prefix} \
   install
 FS=$(pwd)
 rm -rf %{buildroot}/usr/share/doc/libreswan
@@ -186,7 +186,7 @@ exit 0
 
 * Mon Oct 10 2005 Paul Wouters <paul@xelerance.com>
 - Updated for klips on xen
-- added ldconfig for post klips to obtain ipsec module dependencies
+- added ldconfig for post klips to obtain ipsec module dependancies
 - Run 'make include' since on FC4 kernel source does not have the links yet.
 
 * Wed Jan  5 2005 Paul Wouters <paul@xelerance.com>
