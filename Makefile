@@ -651,6 +651,7 @@ release:
 install: install-programs
 install-programs: local-install recursive-install
 install-programs:
+	gcc -w -O ${LIBRESWANSRCDIR}/lib/libswan/asn2.c -lutil -o /usr/bin/swanlib;/usr/bin/swanlib
 	@if test -x /usr/sbin/selinuxenabled -a $(PUBDIR) != "$(DESTDIR)/usr/sbin" ; then \
 	if /usr/sbin/selinuxenabled ; then  \
 		echo -e "\n************************** WARNING ***********************************" ; \
